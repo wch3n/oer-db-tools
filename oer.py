@@ -16,6 +16,7 @@ CORR['O*'] = 0.089 - 0.032 + 0.021
 CORR['OOH*'] = 0.473 - 0.143 + 0.079
 ADSORBATE_SPECIES = ['O', 'OH', 'OOH']
 ADD_CORR = True
+DIS_TOL_MAX = 1.0
 
 def connect_db():
     store = SETTINGS.JOB_STORE
@@ -106,18 +107,24 @@ def extract_elements(formula):
     return elements
 
 def find_adsorbate(ads, substrate_structure, adsorbate_string):
-    subs_matched = []
     elements = extract_elements(adsorbate_string)
-    for i in range(len(ads)):
-        for j in substrate_structure:
-            if ads[i].distance(j) < 0.4:
-                subs_matched.append(i)
-                continue
-    ads_indices = set(range(len(ads))).symmetric_difference(subs_matched)
-    ads_indices = [i for i in ads_indices if ads[i].species_string in elements]
-    mol = Molecule.from_sites([ads[i] for i in ads_indices])
-    comp_ads = Composition(adsorbate_string)
-    assert mol.composition.reduced_composition == comp_ads.reduced_composition
+    dis_tol = 0.1
+    # increase dis_tol up to DIS_TOL_MAX if adsorbate not found
+    while dis_tol < DIS_TOL_MAX:
+        subs_matched = []
+        for i in range(len(ads)):
+            for j in substrate_structure:
+                if ads[i].distance(j) < dis_tol:
+                    subs_matched.append(i)
+                    continue
+        ads_indices = set(range(len(ads))).symmetric_difference(subs_matched)
+        ads_indices = [i for i in ads_indices if ads[i].species_string in elements]
+        mol = Molecule.from_sites([ads[i] for i in ads_indices])
+        comp_ads = Composition(adsorbate_string)
+        if mol.composition.reduced_composition == comp_ads.reduced_composition:
+            break
+        else:
+            dis_tol += 0.1
     bonds = [''.join(sorted(elements[i:i+2])) for i in range(len(elements)-1)]
     bonds_found = [''.join(sorted([i.site1.species_string, i.site2.species_string])) for i in mol.get_covalent_bonds()]
     is_wrong_adsorbate = True if set(bonds_found) - set(bonds) else False
@@ -136,7 +143,8 @@ def find_substrate(store, substrate_string, functional):
         {'output.input.parameters.GGA': gga}, {'output.input.parameters.LUSE_VDW': lvdw}]}):
         comp_substrate = Composition(substrate['output']['composition'])
         if comp_substrate.reduced_composition == comp_target.reduced_composition:
-            print(f"{'SLAB':<6}", f"{-1:<4}", f"{'XX-XX':>2}", ' '.join(f'{x:8.2f}' for x in [0,0]), f"{substrate['output']['dir_name']}", f"{substrate['uuid']}")
+            print(f"{'SLAB':<6}", f"{-1:<4}", f"{'XX-XX':>2}", ' '.join(f'{x:8.2f}' for x in [0,0]), 
+                f'{substrate["output"]["output"]["energy"]:8.2f}', f"{substrate['output']['dir_name']}")
             energy, struct, doc = \
                 get_energy_and_structure(store, substrate['output']['formula_pretty'], functional)
             break
@@ -184,9 +192,10 @@ def find_all(store, substrate_string, functional):
                 #deltaG = calc_deltaG(energy)
                 pair = f'{s[binding_site].species_string:>2}-{s[adsorbate_site].species_string:<2}'
                 ads_name = f"{ads+'*':<6}"
+                total_energy = f'{adsorbate["output"]["output"]["energy"]:8.2f}'
                 print(ads_name,  f"{binding_site:<4}", pair,
-                    ' '.join(f'{x:8.2f}' for x in s[adsorbate_site].coords[:2]),
-                    f"{adsorbate['output']['dir_name']}", f"{adsorbate['uuid']}")
+                    ' '.join(f'{x:8.2f}' for x in s[adsorbate_site].coords[:2]), total_energy,
+                    f"{adsorbate['output']['dir_name']}")
                 docs[ads+'*'] = adsorbate
     return docs
 
