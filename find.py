@@ -7,16 +7,8 @@
 import oer
 
 store = oer.connect_db()
-substrate = 'Ti4 C3 O2'
-#substrate = 'Mo Ti Nb V C3 O2' 
+substrate = 'Mo4 C3 O2'
+substrate = 'Mo Ti Nb V C3 O2' 
+#substrate = 'Mo12 Ti12 Nb12 V12 C36 O23' 
 functional = 'PBE'
-docs = oer.find_all(store, substrate, functional)
-
-# slab for example
-doc = docs['SLAB']['output']['output']
-print(doc.keys())
-print(doc['energy'])
-
-# OH* adsorbate
-doc = docs['OH*']['output']['output']
-print(doc['energy'])
+docs = oer.find_all(store, substrate, functional, reaction='HER', series='/her/')
