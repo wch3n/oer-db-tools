@@ -41,13 +41,15 @@ def calc_deltaG(energy):
 
 def get_param(functional):
     if functional == 'PBE':
-        gga = "PE"; lvdw = False
+        gga = "PE"; lvdw = False; lhfcalc = False
     elif functional == 'rVV10':
-        gga = "ML"; lvdw = True
-    return gga, lvdw
+        gga = "ML"; lvdw = True; lhfcalc = False
+    elif functional == 'PBE0':
+        gga = "PE"; lvdw = False; lhfcalc = True
+    return gga, lvdw, lhfcalc
 
-def report(store, substrate_string, functional, adsorbate_index=None, anchor_index=None, write_poscar=False, exhaustive=False):
-    gga, lvdw = get_param(functional)
+def report(store, substrate_string, functional, adsorbate_index=None, anchor_index=None, write_poscar=False, exhaustive=False, series=None):
+    gga, lvdw, lhfcalc = get_param(functional) 
     energy = {}
     struct = {}
     for i in ['O2', 'H2', 'H2O']:
@@ -58,25 +60,30 @@ def report(store, substrate_string, functional, adsorbate_index=None, anchor_ind
 
     # adsorbate
     tot_energy = 0.0
+    query = [{"name": "adsorbate relax"},
+            {'output.input.parameters.GGA': gga}, {'output.input.parameters.LUSE_VDW': lvdw},
+            {'output.input.parameters.LHFCALC': lhfcalc}]
+    if isinstance(series, str):
+        query.append({"output.dir_name": {"$regex": series}})
     for ads in ADSORBATE_SPECIES:
         comp = comp_substrate + Composition(ads)
-        for adsorbate in store.query({"$and":[{"name": "adsorbate relax"},
-            {'output.input.parameters.GGA': gga}, {'output.input.parameters.LUSE_VDW': lvdw}]}):
+        for adsorbate in store.query({"$and": query}):
             comp_adsorbate = Composition(adsorbate['output']['composition'])
             if comp_adsorbate.reduced_composition == comp.reduced_composition:
+                s = Structure.from_dict(adsorbate['output']['structure'])
+                ads_indices, is_wrong_adsorbate = find_adsorbate(s, struct['substrate'], ads)
+                if is_wrong_adsorbate:
+                    #print('Adsorbate different from the specified species...')
+                    continue
                 if anchor_index is not None:
-                    s = Structure.from_dict(adsorbate['output']['structure'])
-                    ads_indices, is_wrong_adsorbate = find_adsorbate(s, struct['substrate'], ads)
-                    if is_wrong_adsorbate:
-                        print('Adsorbate different from the specified species...')
-                        continue
                     binding_site, adsorbate_site, binding_dist = find_anchor(s, ads_indices)
-                    if binding_site  == anchor_index:
+                    if ((isinstance(anchor_index, int) and binding_site  == anchor_index) or 
+                        (isinstance(anchor_index, list) and binding_site in anchor_index)):
                         print(ads_indices, binding_dist)
-                        print('-'.join([s[anchor_index].species_string, s[adsorbate_site].species_string]))
+                        print('-'.join([s[binding_site].species_string, s[adsorbate_site].species_string]))
                         print(ads, comp_adsorbate, f"\n{adsorbate['output']['dir_name']}", adsorbate['output']['output']['energy'])
                     else:
-                        print('Wrong adsorption site...')
+                        #print('Wrong adsorption site...')
                         continue
                 else:
                     raise NotImplementedError
@@ -136,11 +143,15 @@ def write_poscar(struct, adsorbate_only=True):
             continue
         struct[name].to_file(f'POSCAR.{name.replace("*","-")}')
 
-def find_substrate(store, substrate_string, functional):
-    gga, lvdw = get_param(functional)
+def find_substrate(store, substrate_string, functional, series=None):
+    gga, lvdw, lhfcalc = get_param(functional)
     comp_target = Composition(substrate_string)
-    for substrate in store.query({"$and": [{"name": "substrate relax"},
-        {'output.input.parameters.GGA': gga}, {'output.input.parameters.LUSE_VDW': lvdw}]}):
+    query = [{"name": "substrate relax"},
+            {'output.input.parameters.GGA': gga}, {'output.input.parameters.LUSE_VDW': lvdw},
+            {'output.input.parameters.LHFCALC': lhfcalc}]
+    if isinstance(series, str):
+        query.append({"output.dir_name": {"$regex": series}})
+    for substrate in store.query({"$and": query}):
         comp_substrate = Composition(substrate['output']['composition'])
         if comp_substrate.reduced_composition == comp_target.reduced_composition:
             print(f"{'SLAB':<6}", f"{-1:<4}", f"{'XX-XX':>2}", ' '.join(f'{x:8.2f}' for x in [0,0]), 
@@ -164,8 +175,8 @@ def find_anchor(structure, ads_indices):
             adsorbate_site = idx
     return binding_site, adsorbate_site, binding_dist
 
-def find_all(store, substrate_string, functional):
-    gga, lvdw = get_param(functional)
+def find_all(store, substrate_string, functional, series=None):
+    gga, lvdw, lhfcalc = get_param(functional)
     energy = {}
     struct = {}
     docs = {}
@@ -175,8 +186,12 @@ def find_all(store, substrate_string, functional):
     energy['substrate'], struct['substrate'], comp_substrate, docs['SLAB'] = find_substrate(store, substrate_string, functional)
     for ads in ADSORBATE_SPECIES:
         comp = comp_substrate + Composition(ads)
-        for adsorbate in store.query({"$and":[{"name": "adsorbate relax"},
-            {'output.input.parameters.GGA': gga}, {'output.input.parameters.LUSE_VDW': lvdw}]}):
+        query = [{"name": "adsorbate relax"},
+                {'output.input.parameters.GGA': gga}, {'output.input.parameters.LUSE_VDW': lvdw},
+                {'output.input.parameters.LHFCALC': lhfcalc}]
+        if isinstance(series, str):
+            query.append({"output.dir_name": {"$regex": series}})
+        for adsorbate in store.query({"$and": query}):
             comp_adsorbate = Composition(adsorbate['output']['composition'])
             if comp_adsorbate.reduced_composition == comp.reduced_composition:
                 s = Structure.from_dict(adsorbate['output']['structure'])
