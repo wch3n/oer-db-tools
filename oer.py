@@ -228,8 +228,5 @@ def save_poscar(struct, adsorbate_only=True):
 if __name__ == "__main__":
     store = connect_db()
     substrate = 'Mo4 C3 O2'
-    #substrate = 'Ti2 C1 O2'
-    substrate = 'Mo Ti Nb V C3 O2'
     functional = 'PBE'
     deltaG, energy, struct = report(store, substrate, functional, anchor_index=6+12*2)
-    print(deltaG, energy)
