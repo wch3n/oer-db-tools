@@ -109,7 +109,7 @@ def report(store, substrate_string, functional, adsorbate_index=None, anchor_ind
     deltaG = calc_deltaG(energy, reaction)
     if write_poscar:
         save_poscar(struct)
-    return deltaG, energy, struct
+    return deltaG, energy, struct, forces
 
 def apply_corr(energy):
     for i in energy.keys():
