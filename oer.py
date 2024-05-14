@@ -9,7 +9,10 @@ import re
 CORR = {}
 CORR['H2'] = 0.265 - 0.422 + 0.101
 CORR['O2'] = 0.098 - 0.591 + 0.101
+#CORR['O2'] += 0.03
 CORR['H2O'] = 0.573 - 0.656 + 0.101
+# gas to liquid
+CORR['H2O'] -= 0.20
 CORR['OH*'] = 0.356 - 0.074 + 0.044
 CORR['O*'] = 0.089 - 0.032 + 0.021
 CORR['OOH*'] = 0.473 - 0.143 + 0.079
@@ -24,13 +27,13 @@ def connect_db():
     return store
     
 def get_energy_and_structure(store, formula, functional='PBE'):
-    if functional == 'rVV10':
-        lvdw = True; gga = "ML" 
-    elif functional == 'PBE':
-        lvdw = False; gga = "PE"
+    gga, lvdw, lhfcalc = get_param(functional)
     doc = store.query_one({"$and": [{'output.formula_pretty': formula}, 
-            {'output.input.parameters.LUSE_VDW': lvdw}, {'output.input.parameters.GGA': gga}]}) 
-    return doc['output']['output']['energy'], Structure.from_dict(doc['output']['structure']), doc
+            {'output.input.parameters.LUSE_VDW': lvdw}, {'output.input.parameters.GGA': gga},
+            {'output.input.parameters.LHFCALC': lhfcalc}]}) 
+    print(formula, doc['output']['output']['energy'], doc['output']['dir_name'])
+    return doc['output']['output']['energy'], Structure.from_dict(doc['output']['structure']), \
+           doc['output']['output']['forces'], doc
 
 def calc_deltaG(energy, reaction='OER'):
     match reaction:
@@ -53,15 +56,16 @@ def get_param(functional):
         gga = "PE"; lvdw = False; lhfcalc = True
     return gga, lvdw, lhfcalc
 
-def report(store, substrate_string, functional, adsorbate_index=None, anchor_index=None, write_poscar=False, exhaustive=False, reaction='OER', series=None):
+def report(store, substrate_string, functional, adsorbate_index=None, anchor_index=None, write_poscar=False, exhaustive=True, reaction='OER', series=None):
     gga, lvdw, lhfcalc = get_param(functional) 
     energy = {}
     struct = {}
+    forces = {}
     for i in ['O2', 'H2', 'H2O']:
-        energy[i], struct[i], _ = get_energy_and_structure(store, i, functional)
+        energy[i], struct[i], forces[i], _ = get_energy_and_structure(store, i, functional)
 
     # substrate
-    energy['substrate'], struct['substrate'], comp_substrate, _ = find_substrate(store, substrate_string, functional)
+    energy['substrate'], struct['substrate'], forces['substrate'], comp_substrate, _ = find_substrate(store, substrate_string, functional)
 
     # adsorbate
     tot_energy = 0.0
@@ -69,7 +73,7 @@ def report(store, substrate_string, functional, adsorbate_index=None, anchor_ind
             {'output.input.parameters.GGA': gga}, {'output.input.parameters.LUSE_VDW': lvdw},
             {'output.input.parameters.LHFCALC': lhfcalc}]
     if isinstance(series, str):
-        query.append({"output.dir_name": {"$regex": series}})
+        query.append({"output.dir_name": {"$regex": re.escape(series)}})
     for ads in ADSORBATE_SPECIES[reaction]:
         comp = comp_substrate + Composition(ads)
         for adsorbate in store.query({"$and": query}):
@@ -94,15 +98,15 @@ def report(store, substrate_string, functional, adsorbate_index=None, anchor_ind
                     raise NotImplementedError
 
                 if adsorbate['output']['output']['energy'] < tot_energy:
-                    energy[''.join([ads,'*'])], struct[''.join([ads,'*'])] = adsorbate['output']['output']['energy'], \
-                        Structure.from_dict(adsorbate['output']['structure'])
+                    energy[''.join([ads,'*'])], struct[''.join([ads,'*'])], forces[''.join([ads,'*'])] = adsorbate['output']['output']['energy'], \
+                        Structure.from_dict(adsorbate['output']['structure']), adsorbate['output']['output']['forces']
                     tot_energy = adsorbate['output']['output']['energy']
                 if not exhaustive:
                     break
 
     if ADD_CORR:
         energy = apply_corr(energy)
-    deltaG = calc_deltaG(energy)
+    deltaG = calc_deltaG(energy, reaction)
     if write_poscar:
         save_poscar(struct)
     return deltaG, energy, struct
@@ -161,10 +165,10 @@ def find_substrate(store, substrate_string, functional, series=None):
         if comp_substrate.reduced_composition == comp_target.reduced_composition:
             print(f"{'SLAB':<6}", f"{-1:<4}", f"{'XX-XX':>2}", ' '.join(f'{x:8.2f}' for x in [0,0]), 
                 f'{substrate["output"]["output"]["energy"]:8.2f}', f"{substrate['output']['dir_name']}")
-            energy, struct, doc = \
+            energy, struct, forces, doc = \
                 get_energy_and_structure(store, substrate['output']['formula_pretty'], functional)
             break
-    return energy, struct, comp_substrate, doc
+    return energy, struct, forces, comp_substrate, doc
 
 def find_anchor(structure, ads_indices):
     binding_dist = 10.0; binding_site = None; adsorbate_site = None
@@ -191,8 +195,10 @@ def find_all(store, substrate_string, functional, reaction='OER', series=None):
     energy['substrate'], struct['substrate'], comp_substrate, docs['SLAB'] = find_substrate(store, substrate_string, functional)
     for ads in ADSORBATE_SPECIES[reaction]:
         comp = comp_substrate + Composition(ads)
-        query = [{"name": "adsorbate relax"},
-                {'output.input.parameters.GGA': gga}, {'output.input.parameters.LUSE_VDW': lvdw},
+        #query = [{"name": "adsorbate relax"},
+        #        {'output.input.parameters.GGA': gga}, {'output.input.parameters.LUSE_VDW': lvdw},
+        #        {'output.input.parameters.LHFCALC': lhfcalc}]
+        query = [{'output.input.parameters.GGA': gga}, {'output.input.parameters.LUSE_VDW': lvdw},
                 {'output.input.parameters.LHFCALC': lhfcalc}]
         if isinstance(series, str):
             query.append({"output.dir_name": {"$regex": re.escape(series)}})
@@ -228,5 +234,7 @@ def save_poscar(struct, adsorbate_only=True):
 if __name__ == "__main__":
     store = connect_db()
     substrate = 'Mo4 C3 O2'
+    #substrate = 'Ti2 C1 O2'
+    substrate = 'Mo Ti Nb V C3 O2'
     functional = 'PBE'
     deltaG, energy, struct = report(store, substrate, functional, anchor_index=6+12*2)
