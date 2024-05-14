@@ -18,7 +18,6 @@ CORR['O*'] = 0.089 - 0.032 + 0.021
 CORR['OOH*'] = 0.473 - 0.143 + 0.079
 CORR['H*'] = 0.30 - 0.01 + 0.01
 ADSORBATE_SPECIES = {'OER':['O', 'OH', 'OOH'], 'HER':['H']}
-ADD_CORR = True
 DIS_TOL_MAX = 1.0
 
 def connect_db():
@@ -35,7 +34,9 @@ def get_energy_and_structure(store, formula, functional='PBE'):
     return doc['output']['output']['energy'], Structure.from_dict(doc['output']['structure']), \
            doc['output']['output']['forces'], doc
 
-def calc_deltaG(energy, reaction='OER'):
+def calc_deltaG(energy, reaction='OER', corr=True):
+    if corr:
+        energy = apply_corr(energy)
     match reaction:
         case 'OER':
             g1 = energy['OH*'] - energy['substrate'] - energy['H2O'] + 0.5*energy['H2']
@@ -104,9 +105,7 @@ def report(store, substrate_string, functional, adsorbate_index=None, anchor_ind
                 if not exhaustive:
                     break
 
-    if ADD_CORR:
-        energy = apply_corr(energy)
-    deltaG = calc_deltaG(energy, reaction)
+    deltaG = calc_deltaG(energy, reaction, corr=True)
     if write_poscar:
         save_poscar(struct)
     return deltaG, energy, struct, forces
@@ -230,11 +229,3 @@ def save_poscar(struct, adsorbate_only=True):
         if adsorbate_only and not "*" in name:
             continue
         struct[name].to_file(f'POSCAR.{name.replace("*","-")}')
-
-if __name__ == "__main__":
-    store = connect_db()
-    substrate = 'Mo4 C3 O2'
-    #substrate = 'Ti2 C1 O2'
-    substrate = 'Mo Ti Nb V C3 O2'
-    functional = 'PBE'
-    deltaG, energy, struct = report(store, substrate, functional, anchor_index=6+12*2)
