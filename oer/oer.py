@@ -162,8 +162,8 @@ def find_substrate(store, substrate_string, functional, series=None):
     for substrate in store.query({"$and": query}):
         comp_substrate = Composition(substrate['output']['composition'])
         if comp_substrate.reduced_composition == comp_target.reduced_composition:
-            print(f"{'SLAB':<6}", f"{-1:<4}", f"{'XX-XX':>2}", ' '.join(f'{x:8.2f}' for x in [0,0]), 
-                f'{substrate["output"]["output"]["energy"]:8.2f}', f"{substrate['output']['dir_name']}")
+            #print(f"{'SLAB':<6}", f"{-1:<4}", f"{'XX-XX':>2}", ' '.join(f'{x:8.2f}' for x in [0,0]), 
+            #    f'{substrate["output"]["output"]["energy"]:8.2f}', f"{substrate['output']['dir_name']}")
             energy, struct, forces, doc = \
                 get_energy_and_structure(store, substrate['output']['formula_pretty'], functional)
             break
@@ -194,10 +194,8 @@ def find_all(store, substrate_string, functional, reaction='OER', series=None):
     energy['substrate'], struct['substrate'], comp_substrate, docs['SLAB'] = find_substrate(store, substrate_string, functional)
     for ads in ADSORBATE_SPECIES[reaction]:
         comp = comp_substrate + Composition(ads)
-        #query = [{"name": "adsorbate relax"},
-        #        {'output.input.parameters.GGA': gga}, {'output.input.parameters.LUSE_VDW': lvdw},
-        #        {'output.input.parameters.LHFCALC': lhfcalc}]
-        query = [{'output.input.parameters.GGA': gga}, {'output.input.parameters.LUSE_VDW': lvdw},
+        query = [{"name": "adsorbate relax"},
+                {'output.input.parameters.GGA': gga}, {'output.input.parameters.LUSE_VDW': lvdw},
                 {'output.input.parameters.LHFCALC': lhfcalc}]
         if isinstance(series, str):
             query.append({"output.dir_name": {"$regex": re.escape(series)}})
