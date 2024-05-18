@@ -126,7 +126,8 @@ def report(
         {"output.input.parameters.LHFCALC": lhfcalc},
     ]
     if isinstance(series, str):
-        query.append({"output.dir_name": {"$regex": re.escape(series)}})
+        #query.append({"output.dir_name": {"$regex": re.escape(series)}})
+        query.append({"output.dir_name": {"$regex": f'/{series}/'}})
     for ads in ADSORBATE_SPECIES[reaction]:
         tot_energy = 0.0
         comp = comp_substrate + Composition(ads)
@@ -246,7 +247,8 @@ def find_substrate(store, substrate_string, functional, series=None):
         {"output.input.parameters.LHFCALC": lhfcalc},
     ]
     if isinstance(series, str):
-        query.append({"output.dir_name": {"$regex": re.escape(series)}})
+        #query.append({"output.dir_name": {"$regex": re.escape(series)}})
+        query.append({"output.dir_name": {"$regex": f'/{series}/'}})
     for substrate in store.query({"$and": query}):
         comp_substrate = Composition(substrate["output"]["composition"])
         if comp_substrate.reduced_composition == comp_target.reduced_composition:
@@ -303,7 +305,8 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None):
             {"output.input.parameters.LHFCALC": lhfcalc},
         ]
         if isinstance(series, str):
-            query.append({"output.dir_name": {"$regex": re.escape(series)}})
+            #query.append({"output.dir_name": {"$regex": re.escape(series)}})
+            query.append({"output.dir_name": {"$regex": f'/{series}/'}})
         for adsorbate in store.query({"$and": query}):
             comp_adsorbate = Composition(adsorbate["output"]["composition"])
             if comp_adsorbate.reduced_composition == comp.reduced_composition:
