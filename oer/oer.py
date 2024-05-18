@@ -17,7 +17,7 @@ CORR["OH*"] = 0.356 - 0.074 + 0.044
 CORR["O*"] = 0.089 - 0.032 + 0.021
 CORR["OOH*"] = 0.473 - 0.143 + 0.079
 CORR["H*"] = 0.30 - 0.01 + 0.01
-ADSORBATE_SPECIES = {"OER": ["O", "OH", "OOH"], "HER": ["H"]}
+ADSORBATE_SPECIES = {"OER": ["O", "OH", "OOH"], "OER_bi": ["O", "OH", "H"], "HER": ["H"]}
 DIS_TOL_MAX = 1.0
 
 
@@ -60,6 +60,16 @@ def calc_deltaG(energy, reaction="OER", corr=True):
             g3 = energy["OOH*"] - energy["O*"] - energy["H2O"] + 0.5 * energy["H2"]
             g4 = (
                 energy["substrate"] + energy["O2"] - energy["OOH*"] + 0.5 * energy["H2"]
+            )
+            return {"G1": g1, "G2": g2, "G3": g3, "G4": g4}
+        case "OER_bi":
+            g1 = (
+                energy["OH*"] - energy["substrate"] - energy["H2O"] + 0.5 * energy["H2"]
+            )
+            g2 = energy["O*"] - energy["OH*"] + 0.5 * energy["H2"]
+            g3 = energy["H*"] + energy["O2"] - energy["O*"] - energy["H2O"] + 0.5 * energy["H2"]
+            g4 = (
+                energy["substrate"] - energy["H*"] + 0.5 * energy["H2"]
             )
             return {"G1": g1, "G2": g2, "G3": g3, "G4": g4}
         case "HER":
@@ -105,11 +115,10 @@ def report(
 
     # substrate
     energy["substrate"], struct["substrate"], forces["substrate"], comp_substrate, _ = (
-        find_substrate(store, substrate_string, functional)
+        find_substrate(store, substrate_string, functional, series)
     )
 
     # adsorbate
-    tot_energy = 0.0
     query = [
         {"name": "adsorbate relax"},
         {"output.input.parameters.GGA": gga},
@@ -119,6 +128,7 @@ def report(
     if isinstance(series, str):
         query.append({"output.dir_name": {"$regex": re.escape(series)}})
     for ads in ADSORBATE_SPECIES[reaction]:
+        tot_energy = 0.0
         comp = comp_substrate + Composition(ads)
         for adsorbate in store.query({"$and": query}):
             comp_adsorbate = Composition(adsorbate["output"]["composition"])
@@ -236,7 +246,7 @@ def find_substrate(store, substrate_string, functional, series=None):
         {"output.input.parameters.LHFCALC": lhfcalc},
     ]
     if isinstance(series, str):
-        query.append({"output.dir_name": {"$regex": series}})
+        query.append({"output.dir_name": {"$regex": re.escape(series)}})
     for substrate in store.query({"$and": query}):
         comp_substrate = Composition(substrate["output"]["composition"])
         if comp_substrate.reduced_composition == comp_target.reduced_composition:
@@ -283,7 +293,7 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None):
         forces["substrate"],
         comp_substrate,
         docs["SLAB"],
-    ) = find_substrate(store, substrate_string, functional)
+    ) = find_substrate(store, substrate_string, functional, series)
     for ads in ADSORBATE_SPECIES[reaction]:
         comp = comp_substrate + Composition(ads)
         query = [
