@@ -7,16 +7,14 @@ from pymatgen.core import Structure, Composition, Molecule
 import re
 
 CORR = {}
-CORR["H2"] = 0.265 - 0.422 + 0.101
-CORR["O2"] = 0.098 - 0.591 + 0.101
-# CORR['O2'] += 0.03
-CORR["H2O"] = 0.573 - 0.656 + 0.101
-# gas to liquid
-CORR["H2O"] -= 0.20
-CORR["OH*"] = 0.356 - 0.074 + 0.044
-CORR["O*"] = 0.089 - 0.032 + 0.021
-CORR["OOH*"] = 0.473 - 0.143 + 0.079
-CORR["H*"] = 0.30 - 0.01 + 0.01
+CORR["H2"] = 0.268 - 0.554 + 0.039 + 0.026 + 0.026
+CORR["O2"] = 0.097 - 0.730 + 0.039 + 0.026 + 0.026
+CORR["H2O"] = 0.576 - 0.720 + 0.039 + 0.026 + 0.018 + 0.026
+CORR["H2O"] -= 0.20 # gas to liquid
+CORR["OH*"] = 0.350 - 0.086 + 0.051 
+CORR["O*"] = 0.072 - 0.078 + 0.038 
+CORR["OOH*"] = 0.467 - 0.158 + 0.081 
+CORR["H*"] = 0.175 - 0.015 + 0.011
 ADSORBATE_SPECIES = {"OER": ["O", "OH", "OOH"], "OER_bi": ["O", "OH", "H"], "HER": ["H"]}
 DIS_TOL_MAX = 1.0
 
@@ -27,16 +25,19 @@ def connect_db():
     return store
 
 
-def get_energy_and_structure(store, formula, functional="PBE"):
+def get_energy_and_structure(store, formula, functional="PBE", series=None):
     gga, lvdw, lhfcalc = get_param(functional)
-    doc = store.query_one(
-        {
-            "$and": [
+    query =[
                 {"output.formula_pretty": formula},
                 {"output.input.parameters.LUSE_VDW": lvdw},
                 {"output.input.parameters.GGA": gga},
                 {"output.input.parameters.LHFCALC": lhfcalc},
             ]
+    if isinstance(series, str):
+        query.append({"output.dir_name": {"$regex": re.escape(series)}})
+    doc = store.query_one(
+        {
+            "$and": query
         }
     )
     print(formula, doc["output"]["output"]["energy"], doc["output"]["dir_name"])
@@ -110,7 +111,7 @@ def report(
     forces = {}
     for i in ["O2", "H2", "H2O"]:
         energy[i], struct[i], forces[i], _ = get_energy_and_structure(
-            store, i, functional
+            store, i, functional, series
         )
 
     # substrate
@@ -255,7 +256,7 @@ def find_substrate(store, substrate_string, functional, series=None):
             # print(f"{'SLAB':<6}", f"{-1:<4}", f"{'XX-XX':>2}", ' '.join(f'{x:8.2f}' for x in [0,0]),
             #    f'{substrate["output"]["output"]["energy"]:8.2f}', f"{substrate['output']['dir_name']}")
             energy, struct, forces, doc = get_energy_and_structure(
-                store, substrate["output"]["formula_pretty"], functional
+                store, substrate["output"]["formula_pretty"], functional, series
             )
             break
     return energy, struct, forces, comp_substrate, doc
@@ -286,7 +287,7 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None):
     docs = {}
     for i in ["O2", "H2", "H2O"]:
         energy[i], struct[i], forces[i], docs[i] = get_energy_and_structure(
-            store, i, functional
+            store, i, functional, series
         )
     comp_target = Composition(substrate_string)
     (
