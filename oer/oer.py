@@ -34,7 +34,7 @@ def get_energy_and_structure(store, formula, functional="PBE", series=None):
                 {"output.input.parameters.LHFCALC": lhfcalc},
             ]
     if isinstance(series, str):
-        query.append({"output.dir_name": {"$regex": re.escape(series)}})
+        query.append({"output.dir_name": {"$regex": f'/{series}/'}})
     doc = store.query_one(
         {
             "$and": query
@@ -104,6 +104,7 @@ def report(
     exhaustive=True,
     reaction="OER",
     series=None,
+    series_mol = None,
 ):
     gga, lvdw, lhfcalc = get_param(functional)
     energy = {}
@@ -111,7 +112,7 @@ def report(
     forces = {}
     for i in ["O2", "H2", "H2O"]:
         energy[i], struct[i], forces[i], _ = get_energy_and_structure(
-            store, i, functional, series
+            store, i, functional, series_mol
         )
 
     # substrate
@@ -205,23 +206,23 @@ def extract_elements(formula):
 
 def find_adsorbate(ads, substrate_structure, adsorbate_string):
     elements = extract_elements(adsorbate_string)
-    dis_tol = 0.1
     # increase dis_tol up to DIS_TOL_MAX if adsorbate not found
     while dis_tol < DIS_TOL_MAX:
+        print(dis_tol)
         subs_matched = []
         for i in range(len(ads)):
             for j in substrate_structure:
                 if ads[i].distance(j) < dis_tol:
                     subs_matched.append(i)
-                    continue
+                    break
         ads_indices = set(range(len(ads))).symmetric_difference(subs_matched)
         ads_indices = [i for i in ads_indices if ads[i].species_string in elements]
         mol = Molecule.from_sites([ads[i] for i in ads_indices])
         comp_ads = Composition(adsorbate_string)
-        if mol.composition.reduced_composition == comp_ads.reduced_composition:
+        if mol.composition == comp_ads:
             break
         else:
-            dis_tol += 0.1
+            dis_tol += 0.2
     bonds = ["".join(sorted(elements[i : i + 2])) for i in range(len(elements) - 1)]
     bonds_found = [
         "".join(sorted([i.site1.species_string, i.site2.species_string]))
@@ -279,7 +280,7 @@ def find_anchor(structure, ads_indices):
     return binding_site, adsorbate_site, binding_dist
 
 
-def find_all(store, substrate_string, functional, reaction="OER", series=None):
+def find_all(store, substrate_string, functional, reaction="OER", series=None, series_mol=None):
     gga, lvdw, lhfcalc = get_param(functional)
     energy = {}
     struct = {}
@@ -287,7 +288,7 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None):
     docs = {}
     for i in ["O2", "H2", "H2O"]:
         energy[i], struct[i], forces[i], docs[i] = get_energy_and_structure(
-            store, i, functional, series
+            store, i, functional, series_mol
         )
     comp_target = Composition(substrate_string)
     (
