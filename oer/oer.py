@@ -207,8 +207,8 @@ def extract_elements(formula):
 def find_adsorbate(ads, substrate_structure, adsorbate_string):
     elements = extract_elements(adsorbate_string)
     # increase dis_tol up to DIS_TOL_MAX if adsorbate not found
+    dis_tol = 0.2
     while dis_tol < DIS_TOL_MAX:
-        print(dis_tol)
         subs_matched = []
         for i in range(len(ads)):
             for j in substrate_structure:
