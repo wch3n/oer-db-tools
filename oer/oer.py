@@ -7,10 +7,9 @@ from pymatgen.core import Structure, Composition, Molecule
 import re
 
 CORR = {}
-CORR["H2"] = 0.268 - 0.554 + 0.039 + 0.026 + 0.026
-CORR["O2"] = 0.097 - 0.730 + 0.039 + 0.026 + 0.026
-CORR["H2O"] = 0.576 - 0.720 + 0.039 + 0.026 + 0.018 + 0.026
-CORR["H2O"] -= 0.20 # gas to liquid
+CORR["H2"] = 0.268 - 0.403 + 0.039 + 0.026 + 0.026
+CORR["O2"] = 0.097 - 0.634 + 0.039 + 0.026 + 0.026
+CORR["H2O"] = 0.567 - 0.670 + 0.039 + 0.039 + 0.026
 CORR["OH*"] = 0.350 - 0.086 + 0.051 
 CORR["O*"] = 0.072 - 0.078 + 0.038 
 CORR["OOH*"] = 0.467 - 0.158 + 0.081 
@@ -35,6 +34,9 @@ def get_energy_and_structure(store, formula, functional="PBE", series=None):
             ]
     if isinstance(series, str):
         query.append({"output.dir_name": {"$regex": f'/{series}/'}})
+    elif isinstance(series, list):
+        for _s in series:
+            query.append({"output.dir_name": {"$regex": f'/{_s}/'}})
     doc = store.query_one(
         {
             "$and": query
@@ -49,9 +51,9 @@ def get_energy_and_structure(store, formula, functional="PBE", series=None):
     )
 
 
-def calc_deltaG(energy, reaction="OER", corr=True):
+def calc_deltaG(energy, reaction="OER", corr=True, corr_liquid=0):
     if corr:
-        energy = apply_corr(energy)
+        energy = apply_corr(energy, corr_liquid)
     match reaction:
         case "OER":
             g1 = (
@@ -91,6 +93,10 @@ def get_param(functional):
         gga = "PE"
         lvdw = False
         lhfcalc = True
+    elif functional == "PBE0-rVV10":
+        gga = "PE"
+        lvdw = True
+        lhfcalc = True
     return gga, lvdw, lhfcalc
 
 
@@ -105,6 +111,7 @@ def report(
     reaction="OER",
     series=None,
     series_mol = None,
+    corr_liquid = 0,
 ):
     gga, lvdw, lhfcalc = get_param(functional)
     energy = {}
@@ -128,8 +135,10 @@ def report(
         {"output.input.parameters.LHFCALC": lhfcalc},
     ]
     if isinstance(series, str):
-        #query.append({"output.dir_name": {"$regex": re.escape(series)}})
         query.append({"output.dir_name": {"$regex": f'/{series}/'}})
+    elif isinstance(series, list):
+        for _s in series:
+            query.append({"output.dir_name": {"$regex": f'/{_s}/'}})
     for ads in ADSORBATE_SPECIES[reaction]:
         tot_energy = 0.0
         comp = comp_substrate + Composition(ads)
@@ -185,13 +194,14 @@ def report(
                 if not exhaustive:
                     break
 
-    deltaG = calc_deltaG(energy, reaction, corr=True)
+    deltaG = calc_deltaG(energy, reaction, corr=True, corr_liquid=corr_liquid)
     if write_poscar:
         save_poscar(struct)
     return deltaG, energy, struct, forces
 
 
-def apply_corr(energy):
+def apply_corr(energy, corr_liquid):
+    CORR['H2O'] += corr_liquid
     for i in energy.keys():
         if i in CORR.keys():
             energy[i] += CORR[i]
@@ -249,8 +259,10 @@ def find_substrate(store, substrate_string, functional, series=None):
         {"output.input.parameters.LHFCALC": lhfcalc},
     ]
     if isinstance(series, str):
-        #query.append({"output.dir_name": {"$regex": re.escape(series)}})
         query.append({"output.dir_name": {"$regex": f'/{series}/'}})
+    elif isinstance(series, list):
+        for _s in series:
+            query.append({"output.dir_name": {"$regex": f'/{_s}/'}})
     for substrate in store.query({"$and": query}):
         comp_substrate = Composition(substrate["output"]["composition"])
         if comp_substrate.reduced_composition == comp_target.reduced_composition:
@@ -280,16 +292,17 @@ def find_anchor(structure, ads_indices):
     return binding_site, adsorbate_site, binding_dist
 
 
-def find_all(store, substrate_string, functional, reaction="OER", series=None, series_mol=None):
+def find_all(store, substrate_string, functional, reaction="OER", series=None, series_mol=None, name="adsorbate relax", skip_mol=False):
     gga, lvdw, lhfcalc = get_param(functional)
     energy = {}
     struct = {}
     forces = {}
     docs = {}
-    for i in ["O2", "H2", "H2O"]:
-        energy[i], struct[i], forces[i], docs[i] = get_energy_and_structure(
-            store, i, functional, series_mol
-        )
+    if not skip_mol:
+        for i in ["O2", "H2", "H2O"]:
+            energy[i], struct[i], forces[i], docs[i] = get_energy_and_structure(
+                store, i, functional, series_mol
+            )
     comp_target = Composition(substrate_string)
     (
         energy["substrate"],
@@ -301,14 +314,17 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None, s
     for ads in ADSORBATE_SPECIES[reaction]:
         comp = comp_substrate + Composition(ads)
         query = [
-            {"name": "adsorbate relax"},
+            {"name": name},
             {"output.input.parameters.GGA": gga},
             {"output.input.parameters.LUSE_VDW": lvdw},
             {"output.input.parameters.LHFCALC": lhfcalc},
         ]
         if isinstance(series, str):
-            #query.append({"output.dir_name": {"$regex": re.escape(series)}})
             query.append({"output.dir_name": {"$regex": f'/{series}/'}})
+        elif isinstance(series, list):
+            for _s in series:
+                query.append({"output.dir_name": {"$regex": f'/{_s}/'}})
+
         for adsorbate in store.query({"$and": query}):
             comp_adsorbate = Composition(adsorbate["output"]["composition"])
             if comp_adsorbate.reduced_composition == comp.reduced_composition:
