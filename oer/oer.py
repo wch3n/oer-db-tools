@@ -24,7 +24,7 @@ def connect_db():
     return store
 
 
-def get_energy_and_structure(store, formula, functional="PBE", series=None):
+def get_energy_and_structure(store, formula, functional="PBE", series=None, aexx=None):
     gga, lvdw, lhfcalc = get_param(functional)
     query =[
                 {"output.formula_pretty": formula},
@@ -32,6 +32,8 @@ def get_energy_and_structure(store, formula, functional="PBE", series=None):
                 {"output.input.parameters.GGA": gga},
                 {"output.input.parameters.LHFCALC": lhfcalc},
             ]
+    if lhfcalc and aexx:
+        query.append({"output.input.parameters.AEXX": aexx})
     if isinstance(series, str):
         query.append({"output.dir_name": {"$regex": f'/{series}/'}})
     elif isinstance(series, list):
@@ -112,6 +114,7 @@ def report(
     series=None,
     series_mol = None,
     corr_liquid = 0,
+    aexx=None,
 ):
     gga, lvdw, lhfcalc = get_param(functional)
     energy = {}
@@ -119,12 +122,12 @@ def report(
     forces = {}
     for i in ["O2", "H2", "H2O"]:
         energy[i], struct[i], forces[i], _ = get_energy_and_structure(
-            store, i, functional, series_mol
+            store, i, functional, series_mol, aexx
         )
 
     # substrate
     energy["substrate"], struct["substrate"], forces["substrate"], comp_substrate, _ = (
-        find_substrate(store, substrate_string, functional, series)
+        find_substrate(store, substrate_string, functional, series, aexx)
     )
 
     # adsorbate
@@ -134,6 +137,8 @@ def report(
         {"output.input.parameters.LUSE_VDW": lvdw},
         {"output.input.parameters.LHFCALC": lhfcalc},
     ]
+    if lhfcalc and aexx:
+        query.append({"output.input.parameters.AEXX": aexx})
     if isinstance(series, str):
         query.append({"output.dir_name": {"$regex": f'/{series}/'}})
     elif isinstance(series, list):
@@ -249,7 +254,7 @@ def write_poscar(struct, adsorbate_only=True):
         struct[name].to_file(f'POSCAR.{name.replace("*","-")}')
 
 
-def find_substrate(store, substrate_string, functional, series=None):
+def find_substrate(store, substrate_string, functional, series=None, aexx=None):
     gga, lvdw, lhfcalc = get_param(functional)
     comp_target = Composition(substrate_string)
     query = [
@@ -258,6 +263,8 @@ def find_substrate(store, substrate_string, functional, series=None):
         {"output.input.parameters.LUSE_VDW": lvdw},
         {"output.input.parameters.LHFCALC": lhfcalc},
     ]
+    if lhfcalc and aexx:
+        query.append({"output.input.parameters.AEXX": aexx})
     if isinstance(series, str):
         query.append({"output.dir_name": {"$regex": f'/{series}/'}})
     elif isinstance(series, list):
@@ -269,7 +276,7 @@ def find_substrate(store, substrate_string, functional, series=None):
             # print(f"{'SLAB':<6}", f"{-1:<4}", f"{'XX-XX':>2}", ' '.join(f'{x:8.2f}' for x in [0,0]),
             #    f'{substrate["output"]["output"]["energy"]:8.2f}', f"{substrate['output']['dir_name']}")
             energy, struct, forces, doc = get_energy_and_structure(
-                store, substrate["output"]["formula_pretty"], functional, series
+                store, substrate["output"]["formula_pretty"], functional, series, aexx
             )
             break
     return energy, struct, forces, comp_substrate, doc
@@ -292,25 +299,24 @@ def find_anchor(structure, ads_indices):
     return binding_site, adsorbate_site, binding_dist
 
 
-def find_all(store, substrate_string, functional, reaction="OER", series=None, series_mol=None, name="adsorbate relax", skip_mol=False):
+def find_all(store, substrate_string, functional, reaction="OER", series=None, series_mol=None, name="adsorbate relax", aexx=None, fast_mode=False):
     gga, lvdw, lhfcalc = get_param(functional)
     energy = {}
     struct = {}
     forces = {}
     docs = {}
-    if not skip_mol:
-        for i in ["O2", "H2", "H2O"]:
-            energy[i], struct[i], forces[i], docs[i] = get_energy_and_structure(
-                store, i, functional, series_mol
-            )
-    comp_target = Composition(substrate_string)
+    for i in ["O2", "H2", "H2O"]:
+        energy[i], struct[i], forces[i], docs[i] = get_energy_and_structure(
+            store, i, functional, series_mol, aexx
+        )
     (
         energy["substrate"],
         struct["substrate"],
         forces["substrate"],
         comp_substrate,
         docs["SLAB"],
-    ) = find_substrate(store, substrate_string, functional, series)
+    ) = find_substrate(store, substrate_string, functional, series, aexx)
+    docs['ADS'] = []
     for ads in ADSORBATE_SPECIES[reaction]:
         comp = comp_substrate + Composition(ads)
         query = [
@@ -319,6 +325,8 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None, s
             {"output.input.parameters.LUSE_VDW": lvdw},
             {"output.input.parameters.LHFCALC": lhfcalc},
         ]
+        if lhfcalc and aexx:
+            query.append({"output.input.parameters.AEXX": aexx})
         if isinstance(series, str):
             query.append({"output.dir_name": {"$regex": f'/{series}/'}})
         elif isinstance(series, list):
@@ -329,30 +337,38 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None, s
             comp_adsorbate = Composition(adsorbate["output"]["composition"])
             if comp_adsorbate.reduced_composition == comp.reduced_composition:
                 s = Structure.from_dict(adsorbate["output"]["structure"])
-                ads_indices, is_wrong_adsorbate = find_adsorbate(
-                    s, struct["substrate"], ads
-                )
-                if is_wrong_adsorbate:
-                    # print('Adsorbate different from the specified species...')
-                    continue
-                binding_site, adsorbate_site, _ = find_anchor(s, ads_indices)
-                energy["".join([ads, "*"])], struct["".join([ads, "*"])] = adsorbate[
-                    "output"
-                ]["output"]["energy"], Structure.from_dict(
-                    adsorbate["output"]["structure"]
-                )
-                pair = f"{s[binding_site].species_string:>2}-{s[adsorbate_site].species_string:<2}"
+                if not fast_mode:
+                    ads_indices, is_wrong_adsorbate = find_adsorbate(
+                        s, struct["substrate"], ads
+                    )
+                    if is_wrong_adsorbate:
+                        # print('Adsorbate different from the specified species...')
+                        continue
+                    binding_site, adsorbate_site, _ = find_anchor(s, ads_indices)
+                    energy["".join([ads, "*"])], struct["".join([ads, "*"])] = adsorbate[
+                        "output"
+                    ]["output"]["energy"], Structure.from_dict(
+                        adsorbate["output"]["structure"]
+                    )
+                    pair = f"{s[binding_site].species_string:>2}-{s[adsorbate_site].species_string:<2}"
                 ads_name = f"{ads+'*':<6}"
                 total_energy = f'{adsorbate["output"]["output"]["energy"]:8.2f}'
-                print(
-                    ads_name,
-                    f"{binding_site:<4}",
-                    pair,
-                    " ".join(f"{x:8.2f}" for x in s[adsorbate_site].coords[:2]),
-                    total_energy,
-                    f"{adsorbate['output']['dir_name']}",
-                )
-                docs[ads + "*"] = adsorbate
+                if not fast_mode:
+                    print(
+                        ads_name,
+                        f"{binding_site:<4}",
+                        pair,
+                        " ".join(f"{x:8.2f}" for x in s[adsorbate_site].coords[:2]),
+                        total_energy,
+                        f"{adsorbate['output']['dir_name']}",
+                    )
+                else:
+                    print(
+                        ads_name,
+                        total_energy,
+                        f"{adsorbate['output']['dir_name']}",
+                    )
+                docs['ADS'].append({ads + "*": adsorbate})
     return docs
 
 
