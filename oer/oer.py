@@ -29,7 +29,7 @@ def get_energy_and_structure(store, formula, functional="PBE", series=None, aexx
     query =[
                 {"output.formula_pretty": formula},
                 {"output.input.parameters.LUSE_VDW": lvdw},
-                {"output.input.parameters.GGA": gga},
+                {"output.input.parameters.GGA": {"$regex": gga, "$options": "i"}},
                 {"output.input.parameters.LHFCALC": lhfcalc},
             ]
     if lhfcalc and aexx:
@@ -133,7 +133,7 @@ def report(
     # adsorbate
     query = [
         {"name": "adsorbate relax"},
-        {"output.input.parameters.GGA": gga},
+        {"output.input.parameters.GGA": {"$regex": gga, "$options": "i"}},
         {"output.input.parameters.LUSE_VDW": lvdw},
         {"output.input.parameters.LHFCALC": lhfcalc},
     ]
@@ -259,7 +259,7 @@ def find_substrate(store, substrate_string, functional, series=None, aexx=None):
     comp_target = Composition(substrate_string)
     query = [
         {"name": "substrate relax"},
-        {"output.input.parameters.GGA": gga},
+        {"output.input.parameters.GGA": {"$regex": gga, "$options": "i"}},
         {"output.input.parameters.LUSE_VDW": lvdw},
         {"output.input.parameters.LHFCALC": lhfcalc},
     ]
@@ -316,12 +316,12 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None, s
         comp_substrate,
         docs["SLAB"],
     ) = find_substrate(store, substrate_string, functional, series, aexx)
-    docs['ADS'] = []
     for ads in ADSORBATE_SPECIES[reaction]:
+        docs[ads+'*'] = []
         comp = comp_substrate + Composition(ads)
         query = [
             {"name": name},
-            {"output.input.parameters.GGA": gga},
+            {"output.input.parameters.GGA": {"$regex": gga, "$options": "i"}},
             {"output.input.parameters.LUSE_VDW": lvdw},
             {"output.input.parameters.LHFCALC": lhfcalc},
         ]
@@ -368,7 +368,8 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None, s
                         total_energy,
                         f"{adsorbate['output']['dir_name']}",
                     )
-                docs['ADS'].append({ads + "*": adsorbate})
+                #docs['ADS'].append({ads + "*": adsorbate})
+                docs[ads+'*'].append(adsorbate)
     return docs
 
 
