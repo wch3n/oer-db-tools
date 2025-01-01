@@ -270,15 +270,25 @@ def find_substrate(store, substrate_string, functional, series=None, aexx=None):
     elif isinstance(series, list):
         for _s in series:
             query.append({"output.dir_name": {"$regex": f'/{_s}/'}})
+
+    slabs = []
     for substrate in store.query({"$and": query}):
-        comp_substrate = Composition(substrate["output"]["composition"])
-        if comp_substrate.reduced_composition == comp_target.reduced_composition:
+        if Composition(substrate["output"]["composition"]) == comp_target:
             # print(f"{'SLAB':<6}", f"{-1:<4}", f"{'XX-XX':>2}", ' '.join(f'{x:8.2f}' for x in [0,0]),
             #    f'{substrate["output"]["output"]["energy"]:8.2f}', f"{substrate['output']['dir_name']}")
-            energy, struct, forces, doc = get_energy_and_structure(
-                store, substrate["output"]["formula_pretty"], functional, series, aexx
+            slabs.append(substrate)
+            comp_substrate = Composition(substrate["output"]["composition"])
+
+    eslab = 0
+    for slab in slabs:
+        if slab["output"]["output"]["energy"] < eslab:
+            substrate = slab.copy()
+            eslab = slab["output"]["output"]["energy"]
+
+    energy, struct, forces, doc = get_energy_and_structure(
+            store, substrate["output"]["formula_pretty"], functional, series, aexx
             )
-            break
+
     return energy, struct, forces, comp_substrate, doc
 
 
@@ -316,26 +326,32 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None, s
         comp_substrate,
         docs["SLAB"],
     ) = find_substrate(store, substrate_string, functional, series, aexx)
+        
+    query = [
+        {"name": name},
+        {"output.input.parameters.GGA": {"$regex": gga, "$options": "i"}},
+        {"output.input.parameters.LUSE_VDW": lvdw},
+        {"output.input.parameters.LHFCALC": lhfcalc},
+    ]
+    if lhfcalc and aexx:
+        query.append({"output.input.parameters.AEXX": aexx})
+    if isinstance(series, str):
+        query.append({"output.dir_name": {"$regex": f'/{series}/'}})
+    elif isinstance(series, list):
+        for _s in series:
+            query.append({"output.dir_name": {"$regex": f'/{_s}/'}})
+
+    comp = {}
+
     for ads in ADSORBATE_SPECIES[reaction]:
         docs[ads+'*'] = []
-        comp = comp_substrate + Composition(ads)
-        query = [
-            {"name": name},
-            {"output.input.parameters.GGA": {"$regex": gga, "$options": "i"}},
-            {"output.input.parameters.LUSE_VDW": lvdw},
-            {"output.input.parameters.LHFCALC": lhfcalc},
-        ]
-        if lhfcalc and aexx:
-            query.append({"output.input.parameters.AEXX": aexx})
-        if isinstance(series, str):
-            query.append({"output.dir_name": {"$regex": f'/{series}/'}})
-        elif isinstance(series, list):
-            for _s in series:
-                query.append({"output.dir_name": {"$regex": f'/{_s}/'}})
+        comp[ads+'*'] = comp_substrate + Composition(ads)
 
-        for adsorbate in store.query({"$and": query}):
-            comp_adsorbate = Composition(adsorbate["output"]["composition"])
-            if comp_adsorbate.reduced_composition == comp.reduced_composition:
+    docs['BARE'] = []
+    for adsorbate in store.query({"$and": query}):
+        comp_adsorbate = Composition(adsorbate["output"]["composition"])
+        for ads in ADSORBATE_SPECIES[reaction]:
+            if comp_adsorbate == comp[ads+'*']:
                 s = Structure.from_dict(adsorbate["output"]["structure"])
                 if not fast_mode:
                     ads_indices, is_wrong_adsorbate = find_adsorbate(
@@ -370,6 +386,13 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None, s
                     )
                 #docs['ADS'].append({ads + "*": adsorbate})
                 docs[ads+'*'].append(adsorbate)
+        if comp_adsorbate == comp_substrate:
+            docs['BARE'].append(adsorbate)
+            print(
+                'BARE',
+                total_energy,
+                f"{adsorbate['output']['dir_name']}",
+            )
     return docs
 
 
