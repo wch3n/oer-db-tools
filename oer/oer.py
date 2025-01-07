@@ -53,7 +53,8 @@ def get_energy_and_structure(store, formula, functional="PBE", series=None, aexx
     )
 
 
-def calc_deltaG(energy, reaction="OER", corr=True, corr_liquid=0):
+def calc_deltaG(energy_raw, reaction="OER", corr=True, corr_liquid=0):
+    energy = energy_raw.copy()
     if corr:
         energy = apply_corr(energy, corr_liquid)
     match reaction:
@@ -149,7 +150,7 @@ def report(
         comp = comp_substrate + Composition(ads)
         for adsorbate in store.query({"$and": query}):
             comp_adsorbate = Composition(adsorbate["output"]["composition"])
-            if comp_adsorbate.reduced_composition == comp.reduced_composition:
+            if comp_adsorbate == comp:
                 s = Structure.from_dict(adsorbate["output"]["structure"])
                 ads_indices, is_wrong_adsorbate = find_adsorbate(
                     s, struct["substrate"], ads
@@ -388,6 +389,7 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None, s
                 docs[ads+'*'].append(adsorbate)
         if comp_adsorbate == comp_substrate:
             docs['BARE'].append(adsorbate)
+            total_energy = f'{adsorbate["output"]["output"]["energy"]:8.2f}'
             print(
                 'BARE',
                 total_energy,
