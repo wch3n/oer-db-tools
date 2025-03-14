@@ -14,7 +14,11 @@ CORR["OH*"] = 0.350 - 0.086 + 0.051
 CORR["O*"] = 0.072 - 0.078 + 0.038 
 CORR["OOH*"] = 0.467 - 0.158 + 0.081 
 CORR["H*"] = 0.175 - 0.015 + 0.011
-ADSORBATE_SPECIES = {"OER": ["O", "OH", "OOH"], "OER_bi": ["O", "OH", "H"], "HER": ["H"]}
+CORR["CH3OH"] = 1.343 - 0.751 + 0.039 + 0.039 + 0.024 + 0.026
+ADSORBATE_SPECIES = {"OER": ["O", "OH", "OOH"], "OER_bi": ["O", "OH", "H"], "HER": ["H"],
+                     "CORR_1": ["CO", "CHO", "CH2O", "CH3O", "CH3OH"],}
+MOL_SPECIES = {"OER": ["H2", "O2", "H2O"], 
+               "CORR_1": ["CO", "H2", "H4CO"]}
 DIS_TOL_MAX = 1.0
 
 
@@ -81,6 +85,13 @@ def calc_deltaG(energy_raw, reaction="OER", corr=True, corr_liquid=0):
         case "HER":
             g1 = energy["H*"] - energy["substrate"] - 0.5 * energy["H2"]
             return {"G1": g1}
+        case "CORR_1":
+            g1 = energy["CHO*"] - energy["CO*"] - 0.5 * energy["H2"]
+            g2 = energy["CH2O*"] - energy["CHO*"] - 0.5 * energy["H2"]
+            g3 = energy["CH3O*"] - energy["CH2O*"] - 0.5 * energy["H2"]
+            g4 = energy["CH3OH*"] - energy["CH3O*"] - 0.5 * energy["H2"]
+            g5 = energy["CH3OH"] + substrate - energy["CH3OH*"]
+            return {"G1": g1, "G2": g2, "G3": g3, "G4": g4, "G5": g5}
 
 
 def get_param(functional):
@@ -100,6 +111,10 @@ def get_param(functional):
         gga = "PE"
         lvdw = True
         lhfcalc = True
+    elif functional == "PBE-D3":
+        gga = "PE"
+        lvdw = False
+        lhfcalc = False
     return gga, lvdw, lhfcalc
 
 
@@ -121,7 +136,7 @@ def report(
     energy = {}
     struct = {}
     forces = {}
-    for i in ["O2", "H2", "H2O"]:
+    for i in MOL_SPECIES[reaction]:
         energy[i], struct[i], forces[i], _ = get_energy_and_structure(
             store, i, functional, series_mol, aexx
         )
@@ -309,14 +324,46 @@ def find_anchor(structure, ads_indices):
             adsorbate_site = idx
     return binding_site, adsorbate_site, binding_dist
 
-
-def find_all(store, substrate_string, functional, reaction="OER", series=None, series_mol=None, name="adsorbate relax", aexx=None, fast_mode=False):
+def find_by_name(store, functional, series, name, aexx=None):
     gga, lvdw, lhfcalc = get_param(functional)
     energy = {}
     struct = {}
     forces = {}
     docs = {}
-    for i in ["O2", "H2", "H2O"]:
+
+    query = [
+        {"name": name},
+        {"output.input.parameters.GGA": {"$regex": gga, "$options": "i"}},
+        {"output.input.parameters.LUSE_VDW": lvdw},
+        {"output.input.parameters.LHFCALC": lhfcalc},
+    ]
+    if lhfcalc and aexx:
+        query.append({"output.input.parameters.AEXX": aexx})
+    if isinstance(series, str):
+        query.append({"output.dir_name": {"$regex": f'/{series}/'}})
+    elif isinstance(series, list):
+        for _s in series:
+            query.append({"output.dir_name": {"$regex": f'/{_s}/'}})
+
+    docs = []
+    for entry in store.query({"$and": query}):
+        docs.append(entry)
+        total_energy = f'{entry["output"]["output"]["energy"]:8.2f}'
+        composition = entry["output"]["composition"]
+        print(composition,
+            total_energy,
+            f"{entry['output']['dir_name']}"
+        )
+
+    return docs
+
+def find_all(store, substrate_string, functional, reaction="OER", series=None, series_subs=None, series_mol=None, name="adsorbate relax", aexx=None, fast_mode=False):
+    gga, lvdw, lhfcalc = get_param(functional)
+    energy = {}
+    struct = {}
+    forces = {}
+    docs = {}
+    for i in MOL_SPECIES[reaction]:
         energy[i], struct[i], forces[i], docs[i] = get_energy_and_structure(
             store, i, functional, series_mol, aexx
         )
@@ -326,7 +373,7 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None, s
         forces["substrate"],
         comp_substrate,
         docs["SLAB"],
-    ) = find_substrate(store, substrate_string, functional, series, aexx)
+    ) = find_substrate(store, substrate_string, functional, series_subs, aexx)
         
     query = [
         {"name": name},
