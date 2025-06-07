@@ -16,17 +16,17 @@ CORR["OOH*"] = 0.467 - 0.158 + 0.081
 CORR["H*"] = 0.175 - 0.015 + 0.011
 CORR["CH3OH"] = 1.343 - 0.751 + 0.039 + 0.039 + 0.024 + 0.026
 ADSORBATE_SPECIES = {"OER": ["O", "OH", "OOH"], "OER_bi": ["O", "OH", "H"], "HER": ["H"],
-                     "CORR_1": ["CO", "CHO", "CH2O", "CH3O", "CH3OH"],}
+                     "CO2RR_1": ["CO", "CHO", "CH2O", "CH3O", "CH3OH"],}
 MOL_SPECIES = {"OER": ["H2", "O2", "H2O"], 
-               "CORR_1": ["CO", "H2", "H4CO"]}
-DIS_TOL_MAX = 1.0
+               "CO2RR_1": ["CO", "H2", "H4CO"],
+               "HER": ["H2"]}
+DIS_TOL_MAX = 0.5
 
 
-def connect_db():
-    store = SETTINGS.JOB_STORE
+def connect_db(store_name=None):
+    store = SETTINGS.JOB_STORE.additional_stores[store_name] if store_name is not None else SETTINGS.JOB_STORE
     store.connect()
     return store
-
 
 def get_energy_and_structure(store, formula, functional="PBE", series=None, aexx=None):
     gga, lvdw, lhfcalc = get_param(functional)
@@ -57,10 +57,10 @@ def get_energy_and_structure(store, formula, functional="PBE", series=None, aexx
     )
 
 
-def calc_deltaG(energy_raw, reaction="OER", corr=True, corr_liquid=0):
+def calc_deltaG(energy_raw, reaction="OER", corr=True, corr_liquid=0, corr_dict=CORR):
     energy = energy_raw.copy()
     if corr:
-        energy = apply_corr(energy, corr_liquid)
+        energy = apply_corr(energy, corr_liquid, corr_dict)
     match reaction:
         case "OER":
             g1 = (
@@ -85,7 +85,7 @@ def calc_deltaG(energy_raw, reaction="OER", corr=True, corr_liquid=0):
         case "HER":
             g1 = energy["H*"] - energy["substrate"] - 0.5 * energy["H2"]
             return {"G1": g1}
-        case "CORR_1":
+        case "CO2RR_1":
             g1 = energy["CHO*"] - energy["CO*"] - 0.5 * energy["H2"]
             g2 = energy["CH2O*"] - energy["CHO*"] - 0.5 * energy["H2"]
             g3 = energy["CH3O*"] - energy["CH2O*"] - 0.5 * energy["H2"]
@@ -128,9 +128,11 @@ def report(
     exhaustive=True,
     reaction="OER",
     series=None,
-    series_mol = None,
-    corr_liquid = 0,
+    series_mol=None,
+    corr_liquid=0,
+    corr_dict=CORR,
     aexx=None,
+    fast_mode=False
 ):
     gga, lvdw, lhfcalc = get_param(functional)
     energy = {}
@@ -166,40 +168,46 @@ def report(
         for adsorbate in store.query({"$and": query}):
             comp_adsorbate = Composition(adsorbate["output"]["composition"])
             if comp_adsorbate == comp:
-                s = Structure.from_dict(adsorbate["output"]["structure"])
-                ads_indices, is_wrong_adsorbate = find_adsorbate(
-                    s, struct["substrate"], ads
-                )
-                if is_wrong_adsorbate:
-                    # print('Adsorbate different from the specified species...')
-                    continue
-                if anchor_index is not None:
-                    binding_site, adsorbate_site, binding_dist = find_anchor(
-                        s, ads_indices
+                if not fast_mode:
+                    s = Structure.from_dict(adsorbate["output"]["structure"])
+                    ads_indices, is_wrong_adsorbate = find_adsorbate(
+                        s, struct["substrate"], ads
                     )
-                    if (
-                        isinstance(anchor_index, int) and binding_site == anchor_index
-                    ) or (
-                        isinstance(anchor_index, list) and binding_site in anchor_index
-                    ):
-                        # print(ads_indices, binding_dist)
-                        print(
-                            ads,
-                            binding_site,
-                            "-".join(
-                                [
-                                    s[binding_site].species_string,
-                                    s[adsorbate_site].species_string,
-                                ]
-                            ),
-                            adsorbate["output"]["output"]["energy"],
-                            f"{adsorbate['output']['dir_name']}",
-                        )
-                    else:
-                        # print('Wrong adsorption site...')
+                    if is_wrong_adsorbate:
+                        # print('Adsorbate different from the specified species...')
                         continue
+                    if anchor_index is not None:
+                        binding_site, adsorbate_site, binding_dist = find_anchor(
+                            s, ads_indices
+                        )
+                        if (
+                            isinstance(anchor_index, int) and binding_site == anchor_index
+                        ) or (
+                            isinstance(anchor_index, list) and binding_site in anchor_index
+                        ):
+                            print(
+                                ads,
+                                binding_site,
+                                "-".join(
+                                    [
+                                        s[binding_site].species_string,
+                                        s[adsorbate_site].species_string,
+                                    ]
+                                ),
+                                adsorbate["output"]["output"]["energy"],
+                                f"{adsorbate['output']['dir_name']}",
+                            )
+                        else:
+                            # print('Wrong adsorption site...')
+                            continue
+                    else:
+                        raise NotImplementedError
                 else:
-                    raise NotImplementedError
+                    print(
+                        ads,
+                        adsorbate["output"]["output"]["energy"],
+                        f"{adsorbate['output']['dir_name']}",
+                        )
 
                 if adsorbate["output"]["output"]["energy"] < tot_energy:
                     (
@@ -215,17 +223,18 @@ def report(
                 if not exhaustive:
                     break
 
-    deltaG = calc_deltaG(energy, reaction, corr=True, corr_liquid=corr_liquid)
+    deltaG = calc_deltaG(energy, reaction, corr=True, corr_liquid=corr_liquid, corr_dict=corr_dict)
     if write_poscar:
         save_poscar(struct)
     return deltaG, energy, struct, forces
 
 
-def apply_corr(energy, corr_liquid):
-    CORR['H2O'] += corr_liquid
+def apply_corr(energy, corr_liquid, corr_dict):
+    corr = corr_dict.copy()
+    corr['H2O'] += corr_liquid
     for i in energy.keys():
-        if i in CORR.keys():
-            energy[i] += CORR[i]
+        if i in corr.keys():
+            energy[i] += corr[i]
     return energy
 
 
@@ -324,12 +333,30 @@ def find_anchor(structure, ads_indices):
             adsorbate_site = idx
     return binding_site, adsorbate_site, binding_dist
 
+def find_by_dir_name(store, series, name):
+    query = [
+        {"name": name},
+    ]
+    if isinstance(series, str):
+        query.append({"output.dir_name": {"$regex": f'/{series}/'}})
+    elif isinstance(series, list):
+        for _s in series:
+            query.append({"output.dir_name": {"$regex": f'/{_s}/'}})
+    
+    docs = []
+    for entry in store.query({"$and": query}):
+        docs.append(entry)
+        composition = entry["output"]["composition"]
+        print(composition,
+            f"{entry['output']['dir_name']}"
+        )
+    return docs
+
 def find_by_name(store, functional, series, name, aexx=None):
     gga, lvdw, lhfcalc = get_param(functional)
     energy = {}
     struct = {}
     forces = {}
-    docs = {}
 
     query = [
         {"name": name},
