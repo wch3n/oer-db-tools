@@ -149,7 +149,6 @@ def report_co2rr_mace(
 
     # molecules
     for mol in MOL_SPECIES[reaction]:
-        series = mol.lower()
         comp_mol = Composition(mol).as_dict()
         query = [
             {"name": "molecule relax"},
@@ -167,7 +166,14 @@ def report_co2rr_mace(
             {"output.input.calculator": "macecalculator"},
         ]
         query += [{"output.dir_name": regex_dir_name(rc)}]
+        if isinstance(series, str):
+            query += [{"output.dir_name": regex_dir_name(series)}]
+        elif isinstance(series, list):
+            for _s in series:
+                query += [{"output.dir_name": regex_dir_name(_s)}]
         docs = [i for i in store.query({"$and": query})]
+        if len(docs) > 1:
+            raise ValueError("More than one adsorbate entry found!")
         energy["*" + rc], free_energy["*" + rc] = get_energies(docs[0])
 
     for i, rc in enumerate(react_coords):
