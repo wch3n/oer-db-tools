@@ -8,10 +8,12 @@ import re
 
 MOL_SPECIES = {"CO2RR": ["CO2", "H2", "H2O", "CO"]}
 
+
 def path_map(yaml_file="symlinks.yaml"):
     with open(yaml_file, "r") as f:
         data = yaml.safe_load(f)
     return data
+
 
 def mongo_composition_match(field, composition):
     """
@@ -116,9 +118,11 @@ def get_energies(doc):
         doc["output"]["output"]["output"]["free_energy"],
     )
 
+
 def regex_dir_name(name):
     pattern = rf"(^|/){re.escape(name)}(/|$)"
     return re.compile(pattern)
+
 
 def report_co2rr_mace(
     store,
@@ -128,6 +132,8 @@ def report_co2rr_mace(
     n_desorbed=None,
     n_protons=None,
     series=None,
+    write_yaml=True,
+    yaml_prefix='co2rr'
 ):
     from pymatgen.core import Composition
 
@@ -184,10 +190,37 @@ def report_co2rr_mace(
             + free_energy["H2O"] * n_desorbed[i]
             - 0.5 * free_energy["H2"] * n_protons[i]
         )
+    if write_yaml:
+        _to_yaml(
+            yaml_prefix=yaml_prefix,
+            react_coords=react_coords,
+            n_desorbed=n_desorbed,
+            n_protons=n_protons,
+            energy=energy,
+            free_energy=free_energy,
+            delta_g=delta_g,
+        )
 
     return energy, free_energy, delta_g
 
-if __name__ == '__main__':
+
+def _to_yaml(yaml_prefix, react_coords, n_desorbed, n_protons, energy, free_energy, delta_g):
+    data = {
+        rc: {
+            "n_desorbed": nd,
+            "n_protons": np,
+            "energy": energy['*'+rc],
+            "free_energy": free_energy['*'+rc],
+            "delta_g": delta_g['*'+rc],
+        }
+        for rc, nd, np in zip(react_coords, n_desorbed, n_protons)
+    }
+
+    with open(f"{yaml_prefix}.yaml", "w") as f:
+        yaml.dump(data, f, sort_keys=False)
+
+
+if __name__ == "__main__":
     store = oer.connect_db()
     substrate = "Ti90 C60 O48 H48 F12 Cu15"  # 0.33 ML
     react_coords = ["co2", "co2-h", "co2-h-h", "co", "cho", "ch2o", "ch3o", "ch3oh"]
