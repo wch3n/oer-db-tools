@@ -5,6 +5,8 @@ from os.path import join
 from jobflow import SETTINGS
 from pymatgen.core import Structure, Composition, Molecule
 import re
+import yaml
+from .co2rr import mongo_composition_match, regex_dir_name, get_energies
 
 CORR = {}
 CORR["H2"] = 0.268 - 0.403 + 0.039 + 0.026 + 0.026
@@ -471,6 +473,108 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None, s
             )
     return docs
 
+def report_her_mace(
+    store,
+    substrate_string,
+    reaction="HER",
+    react_coords=None,
+    n_desorbed=None,
+    n_protons=None,
+    series=None,
+    write_yaml=True,
+    yaml_prefix='her'
+):
+    from pymatgen.core import Composition
+
+    energy = {}
+    free_energy = {}
+
+    comp_substrate = Composition(substrate_string).as_dict()
+    query = [{"name": "substrate relax"}, {"output.input.calculator": "macecalculator"}]
+    query += mongo_composition_match("output.composition", comp_substrate)
+    if isinstance(series, str):
+        query += [{"output.dir_name": regex_dir_name(series)}]
+    elif isinstance(series, list):
+        for _s in series:
+            query += [{"output.dir_name": regex_dir_name(_s)}]
+    docs = [i for i in store.query({"$and": query})]
+    if len(docs) > 1:
+        raise ValueError("More than one substrate entry found!")
+    energy["substrate"], free_energy["substrate"] = get_energies(docs[0])
+
+    # molecules
+    for mol in MOL_SPECIES[reaction]:
+        comp_mol = Composition(mol).as_dict()
+        query = [
+            {"name": "molecule relax"},
+            {"output.input.calculator": "macecalculator"},
+        ]
+        query += mongo_composition_match("output.composition", comp_mol)
+        docs = [i for i in store.query({"$and": query})]
+        energy[mol], free_energy[mol] = get_energies(docs[0])
+
+    delta_g = {}
+    # the first step is always the adsorption of CO2
+    rc_uniq = []
+    for i, rc in enumerate(react_coords):
+        rc_name = rc+f'_{i}' if rc in rc_uniq else rc
+        rc_uniq.append(rc_name)
+
+        query = [
+            #{"name": "adsorbate relax"},
+            {"output.input.calculator": "macecalculator"},
+        ]
+        query += [{"output.dir_name": regex_dir_name(rc)}]
+        if isinstance(series, str):
+            query += [{"output.dir_name": regex_dir_name(series)}]
+        elif isinstance(series, list):
+            for _s in series:
+                query += [{"output.dir_name": regex_dir_name(_s)}]
+        docs = [i for i in store.query({"$and": query})]
+        if len(docs) > 1:
+            raise ValueError("More than one adsorbate entry found!")
+        energy["*" + rc_name], free_energy["*" + rc_name] = get_energies(docs[0])
+
+    rc_uniq = []
+    for i, rc in enumerate(react_coords):
+        rc_name = rc+f'_{i}' if rc in rc_uniq else rc
+        rc_uniq.append(rc_name)
+
+        delta_g["*" + rc_name] = (
+            free_energy["*" + rc]
+            - free_energy["substrate"]
+            + free_energy["H2"] * n_desorbed[i]
+            - 0.5 * free_energy["H2"] * n_protons[i]
+        )
+
+    if write_yaml:
+        _to_yaml(
+            yaml_prefix=yaml_prefix,
+            react_coords=rc_uniq,
+            n_desorbed=n_desorbed,
+            n_protons=n_protons,
+            energy=energy,
+            free_energy=free_energy,
+            delta_g=delta_g,
+        )
+
+    return energy, free_energy, delta_g
+
+
+def _to_yaml(yaml_prefix, react_coords, n_desorbed, n_protons, energy, free_energy, delta_g):
+    data = {
+        rc: {
+            "n_desorbed": nd,
+            "n_protons": np,
+            "energy": energy['*'+rc],
+            "free_energy": free_energy['*'+rc],
+            "delta_g": delta_g['*'+rc],
+        }
+        for rc, nd, np in zip(react_coords, n_desorbed, n_protons)
+    }
+
+    with open(f"{yaml_prefix}.yaml", "w") as f:
+        yaml.dump(data, f, sort_keys=False)
 
 def save_poscar(struct, adsorbate_only=True):
     for name in struct:

@@ -6,7 +6,7 @@ import oer
 import yaml
 import re
 
-MOL_SPECIES = {"CO2RR": ["CO2", "H2", "H2O", "CO"]}
+MOL_SPECIES = {"CO2RR": ["CO2", "H2", "H2O", "CO", "CH3OH", "CH4", "HCOOH"]}
 
 
 def path_map(yaml_file="symlinks.yaml"):
@@ -133,7 +133,7 @@ def report_co2rr_mace(
     n_protons=None,
     series=None,
     write_yaml=True,
-    yaml_prefix='co2rr'
+    yaml_prefix="co2rr",
 ):
     from pymatgen.core import Composition
 
@@ -162,7 +162,10 @@ def report_co2rr_mace(
         ]
         query += mongo_composition_match("output.composition", comp_mol)
         docs = [i for i in store.query({"$and": query})]
-        energy[mol], free_energy[mol] = get_energies(docs[0])
+        try:
+            energy[mol], free_energy[mol] = get_energies(docs[0])
+        except Exception as e:
+            print(f"{mol} not found")
 
     delta_g = {}
     # the first step is always the adsorption of CO2
@@ -190,6 +193,14 @@ def report_co2rr_mace(
             + free_energy["H2O"] * n_desorbed[i]
             - 0.5 * free_energy["H2"] * n_protons[i]
         )
+    if react_coords[-1].upper() in MOL_SPECIES[reaction]:
+        delta_g[react_coords[-1] + "_g"] = (
+            free_energy[react_coords[-1].upper()]
+            + free_energy["H2O"] * n_desorbed[-1]
+            - 0.5 * free_energy["H2"] * n_protons[-1]
+            - free_energy["CO2"]
+        )
+
     if write_yaml:
         _to_yaml(
             yaml_prefix=yaml_prefix,
@@ -199,23 +210,32 @@ def report_co2rr_mace(
             energy=energy,
             free_energy=free_energy,
             delta_g=delta_g,
+            reaction=reaction,
         )
 
     return energy, free_energy, delta_g
 
 
-def _to_yaml(yaml_prefix, react_coords, n_desorbed, n_protons, energy, free_energy, delta_g):
+def _to_yaml(
+    yaml_prefix, react_coords, n_desorbed, n_protons, energy, free_energy, delta_g, reaction
+):
     data = {
         rc: {
             "n_desorbed": nd,
             "n_protons": np,
-            "energy": energy['*'+rc],
-            "free_energy": free_energy['*'+rc],
-            "delta_g": delta_g['*'+rc],
+            "energy": energy["*" + rc],
+            "free_energy": free_energy["*" + rc],
+            "delta_g": delta_g["*" + rc],
         }
         for rc, nd, np in zip(react_coords, n_desorbed, n_protons)
     }
-
+    if react_coords[-1].upper() in MOL_SPECIES[reaction]:
+        data[react_coords[-1]+'_g'] = {
+                "n_desorbed": n_desorbed[-1],
+                "n_protons": n_protons[-1],
+                "delta_g": delta_g[react_coords[-1]+'_g'],
+            }
+        
     with open(f"{yaml_prefix}.yaml", "w") as f:
         yaml.dump(data, f, sort_keys=False)
 
