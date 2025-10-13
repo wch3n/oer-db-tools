@@ -7,6 +7,7 @@ from pymatgen.core import Structure, Composition, Molecule
 import re
 import yaml
 from .co2rr import mongo_composition_match, regex_dir_name, get_energies
+import oer
 
 CORR = {}
 CORR["H2"] = 0.268 - 0.403 + 0.039 + 0.026 + 0.026
@@ -21,7 +22,7 @@ ADSORBATE_SPECIES = {"OER": ["O", "OH", "OOH"], "OER_bi": ["O", "OH", "H"], "HER
                      "CO2RR_1": ["CO", "CHO", "CH2O", "CH3O", "CH3OH"],}
 MOL_SPECIES = {"OER": ["H2", "O2", "H2O"], 
                "CO2RR_1": ["CO", "H2", "H4CO"],
-               "HER": ["H2"]}
+               "HER": ["H2", "H2O"]}
 DIS_TOL_MAX = 0.5
 
 
@@ -30,7 +31,8 @@ def connect_db(store_name=None):
     store.connect()
     return store
 
-def get_energy_and_structure(store, formula, functional="PBE", series=None, aexx=None):
+def get_energy_and_structure(store, formula, functional="PBE", series=None, aexx=None, thermo_corr=False):
+    print(f"Searching entries {formula} in {series}...")
     gga, lvdw, lhfcalc = get_param(functional)
     query =[
                 {"output.formula_pretty": formula},
@@ -50,9 +52,15 @@ def get_energy_and_structure(store, formula, functional="PBE", series=None, aexx
             "$and": query
         }
     )
-    print(formula, doc["output"]["output"]["energy"], doc["output"]["dir_name"])
+    energy = doc["output"]["output"]["energy"]
+    dir_name = doc["output"]["dir_name"]
+    if thermo_corr:
+        print(formula, doc["output"]["output"]["energy"], doc["thermo_corr"], doc["output"]["dir_name"])
+        energy +=  doc["thermo_corr"]
+    else:
+        print(formula, doc["output"]["output"]["energy"], doc["output"]["dir_name"])
     return (
-        doc["output"]["output"]["energy"],
+        energy,
         Structure.from_dict(doc["output"]["structure"]),
         doc["output"]["output"]["forces"],
         doc,
@@ -281,7 +289,7 @@ def write_poscar(struct, adsorbate_only=True):
         struct[name].to_file(f'POSCAR.{name.replace("*","-")}')
 
 
-def find_substrate(store, substrate_string, functional, series=None, aexx=None):
+def find_substrate(store, substrate_string, functional, series=None, aexx=None, thermo_corr=False):
     gga, lvdw, lhfcalc = get_param(functional)
     comp_target = Composition(substrate_string)
     query = [
@@ -313,7 +321,7 @@ def find_substrate(store, substrate_string, functional, series=None, aexx=None):
             eslab = slab["output"]["output"]["energy"]
 
     energy, struct, forces, doc = get_energy_and_structure(
-            store, substrate["output"]["formula_pretty"], functional, series, aexx
+            store, substrate["output"]["formula_pretty"], functional, series, aexx, thermo_corr=thermo_corr
             )
 
     return energy, struct, forces, comp_substrate, doc
@@ -473,6 +481,86 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None, s
             )
     return docs
 
+def get_adsorbate_energy(
+    store,
+    functional,
+    series,
+    aexx=None,
+    thermo_corr=False
+):
+    gga, lvdw, lhfcalc = oer.get_param(functional)
+    query = [
+        {"name": "adsorbate relax"},
+        {"output.input.parameters.GGA": {"$regex": gga, "$options": "i"}},
+        {"output.input.parameters.LUSE_VDW": lvdw},
+        {"output.input.parameters.LHFCALC": lhfcalc},
+    ]
+    if lhfcalc and aexx:
+        query.append({"output.input.parameters.AEXX": aexx})
+    if isinstance(series, str):
+        query += [{"output.dir_name": regex_dir_name(series)}]
+    elif isinstance(series, list):
+        for _s in series:
+            query += [{"output.dir_name": regex_dir_name(_s)}]
+    doc = store.query_one({"$and": query})
+    return doc["output"]["output"]["energy"] + doc["thermo_corr"] if thermo_corr else doc["output"]["output"]["energy"]
+
+def report_her(
+    store,
+    substrate_string,
+    functional,
+    reaction="HER",
+    react_coords=None,
+    n_desorbed=None,
+    n_protons=None,
+    series=None,
+    series_mol=None,
+    aexx=None,
+    thermo_corr=False,
+    write_yaml=True,
+    yaml_prefix="her"
+):
+    gga, lvdw, lhfcalc = oer.get_param(functional)
+    energy = {}
+    struct = {}
+    forces = {}
+    for i in MOL_SPECIES[reaction]:
+        energy[i], struct[i], forces[i], _ = oer.get_energy_and_structure(
+            store, i, functional, series_mol, aexx, thermo_corr
+        )
+    energy["H"] = 0.5 * energy["H2"]
+
+    # substrate
+    energy["substrate"], struct["substrate"], forces["substrate"], comp_substrate, _ = (
+        oer.find_substrate(store, substrate_string, functional, series, aexx, thermo_corr)
+    )
+
+    # go through along the reaction coords
+    delta_g = {}
+    free_energy = {}
+    e0 = energy["substrate"] 
+    for i, rc in enumerate(react_coords):
+        rc_path = ([series] if isinstance(series, str) else list(series)) + [rc]
+        energy_rc = get_adsorbate_energy(store, functional, rc_path, thermo_corr=thermo_corr)
+        free_energy["*" + rc] = energy_rc
+        delta_g["*" + rc] = (energy_rc
+            + energy["H2O"] * n_desorbed[i]
+            - energy["H"] * n_protons[i] - e0
+        )
+    
+    print(free_energy, delta_g)
+
+    if write_yaml:
+        _to_yaml(
+            yaml_prefix=yaml_prefix,
+            react_coords=react_coords,
+            n_desorbed=n_desorbed,
+            n_protons=n_protons,
+            free_energy=free_energy,
+            delta_g=delta_g,
+            reaction=reaction,
+        )
+
 def report_her_mace(
     store,
     substrate_string,
@@ -543,7 +631,7 @@ def report_her_mace(
         delta_g["*" + rc_name] = (
             free_energy["*" + rc]
             - free_energy["substrate"]
-            + free_energy["H2"] * n_desorbed[i]
+            + free_energy["H2O"] * n_desorbed[i]
             - 0.5 * free_energy["H2"] * n_protons[i]
         )
 
@@ -553,7 +641,6 @@ def report_her_mace(
             react_coords=rc_uniq,
             n_desorbed=n_desorbed,
             n_protons=n_protons,
-            energy=energy,
             free_energy=free_energy,
             delta_g=delta_g,
         )
@@ -561,17 +648,23 @@ def report_her_mace(
     return energy, free_energy, delta_g
 
 
-def _to_yaml(yaml_prefix, react_coords, n_desorbed, n_protons, energy, free_energy, delta_g):
+def _to_yaml(yaml_prefix, react_coords, n_desorbed, n_protons, free_energy, delta_g, reaction):
     data = {
         rc: {
             "n_desorbed": nd,
             "n_protons": np,
-            "energy": energy['*'+rc],
             "free_energy": free_energy['*'+rc],
             "delta_g": delta_g['*'+rc],
         }
         for rc, nd, np in zip(react_coords, n_desorbed, n_protons)
     }
+    last = react_coords[-1].split('_')[0]
+    if last.upper() in MOL_SPECIES[reaction]:
+        data[last+'_g'] = {
+            "n_desorbed": n_desorbed[-1],
+            "n_protons": n_protons[-1],
+            "delta_g": delta_g[last+'_g'],
+        }
 
     with open(f"{yaml_prefix}.yaml", "w") as f:
         yaml.dump(data, f, sort_keys=False)

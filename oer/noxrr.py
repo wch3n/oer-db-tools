@@ -6,8 +6,7 @@ import oer
 import yaml
 import re
 
-MOL_SPECIES = {"CO2RR": ["CO2", "H2", "H2O", "CO", "CH3OH", "CH4", "HCOOH", "CH2O"]}
-
+MOL_SPECIES = {"NO3RR": ["H2", "H2O", "H3N", "HNO3"]}
 
 def path_map(yaml_file="symlinks.yaml"):
     with open(yaml_file, "r") as f:
@@ -40,11 +39,12 @@ def mongo_composition_match(field, composition):
     return element_queries + [queries[-1]]
 
 
-def find_adsorbate(
+def get_adsorbate_energy(
     store,
     functional,
     series,
     aexx=None,
+    thermo_corr=False
 ):
     gga, lvdw, lhfcalc = oer.get_param(functional)
     query = [
@@ -61,20 +61,23 @@ def find_adsorbate(
         for _s in series:
             query += [{"output.dir_name": regex_dir_name(_s)}]
     doc = store.query_one({"$and": query})
-    return doc["output"]["output"]["energy"]
+    return doc["output"]["output"]["energy"] + doc["thermo_corr"] if thermo_corr else doc["output"]["output"]["energy"]
 
 
-def report_co2rr(
+def report_noxrr(
     store,
     substrate_string,
     functional,
-    reaction="CO2RR",
+    reaction="NO3RR",
     react_coords=None,
     n_desorbed=None,
     n_protons=None,
     series=None,
     series_mol=None,
     aexx=None,
+    thermo_corr=False,
+    write_yaml=True,
+    yaml_prefix="noxrr",
 ):
     gga, lvdw, lhfcalc = oer.get_param(functional)
     energy = {}
@@ -82,34 +85,42 @@ def report_co2rr(
     forces = {}
     for i in MOL_SPECIES[reaction]:
         energy[i], struct[i], forces[i], _ = oer.get_energy_and_structure(
-            store, i, functional, series_mol, aexx
+            store, i, functional, series_mol, aexx, thermo_corr
         )
     energy["H"] = 0.5 * energy["H2"]
 
     # substrate
     energy["substrate"], struct["substrate"], forces["substrate"], comp_substrate, _ = (
-        oer.find_substrate(store, substrate_string, functional, series, aexx)
+        oer.find_substrate(store, substrate_string, functional, series, aexx, thermo_corr)
     )
 
     # go through along the reaction coords
-    react_coords_path = path_map()
-    delta_g = []
-    delta_g_raw = []
-    delta_g.append(energy["substrate"] + energy["CO2"])
-    delta_g_raw.append(energy["substrate"] + energy["CO2"])
+    delta_g = {}
+    free_energy = {}
+    e0 = energy["substrate"] + energy["HNO3"]
 
-    for i, rc in enumerate(react_coords[1:]):
-        print(rc)
-        rc_path = react_coords_path[rc]
-        delta_g_raw.append(find_adsorbate(store, functional, series + [rc_path]))
-        delta_g.append(
-            find_adsorbate(store, functional, series + [rc_path])
-            + energy["H2O"] * n_desorbed[i + 1]
-            - energy["H"] * n_protons[i + 1]
+    for i, rc in enumerate(react_coords):
+        rc_path = ([series] if isinstance(series, str) else list(series)) + [rc]
+        energy_rc = get_adsorbate_energy(store, functional, rc_path, thermo_corr=thermo_corr)
+        #print(rc, energy_rc)
+        free_energy["*" + rc] = energy_rc
+        delta_g["*" + rc] = (energy_rc
+            + energy["H2O"] * n_desorbed[i]
+            - energy["H"] * n_protons[i] - e0
         )
 
-    print([i for i in zip(react_coords, np.array(delta_g_raw))])
-    print([i for i in zip(react_coords, np.array(delta_g) - delta_g[0])])
+    print(free_energy, delta_g)
+
+    if write_yaml:
+        _to_yaml(
+            yaml_prefix=yaml_prefix,
+            react_coords=react_coords,
+            n_desorbed=n_desorbed,
+            n_protons=n_protons,
+            free_energy=free_energy,
+            delta_g=delta_g,
+            reaction=reaction,
+        )
 
 
 def get_energies(doc):
@@ -124,16 +135,16 @@ def regex_dir_name(name):
     return re.compile(pattern)
 
 
-def report_co2rr_mace(
+def report_noxrr_mace(
     store,
     substrate_string,
-    reaction="CO2RR",
+    reaction="NO3RR",
     react_coords=None,
     n_desorbed=None,
     n_protons=None,
     series=None,
     write_yaml=True,
-    yaml_prefix="co2rr",
+    yaml_prefix="noxrr",
 ):
     from pymatgen.core import Composition
 
@@ -188,7 +199,7 @@ def report_co2rr_mace(
     for i, rc in enumerate(react_coords):
         delta_g["*" + rc] = (
             free_energy["*" + rc]
-            - free_energy["CO2"]
+            - free_energy["HNO3"]
             - free_energy["substrate"]
             + free_energy["H2O"] * n_desorbed[i]
             - 0.5 * free_energy["H2"] * n_protons[i]
@@ -199,7 +210,7 @@ def report_co2rr_mace(
             free_energy[last.upper()]
             + free_energy["H2O"] * n_desorbed[-1]
             - 0.5 * free_energy["H2"] * n_protons[-1]
-            - free_energy["CO2"]
+            - free_energy["HNO3"]
         )
 
     if write_yaml:
@@ -218,13 +229,12 @@ def report_co2rr_mace(
 
 
 def _to_yaml(
-    yaml_prefix, react_coords, n_desorbed, n_protons, energy, free_energy, delta_g, reaction
+    yaml_prefix, react_coords, n_desorbed, n_protons, free_energy, delta_g, reaction
 ):
     data = {
         rc: {
             "n_desorbed": nd,
             "n_protons": np,
-            "energy": energy["*" + rc],
             "free_energy": free_energy["*" + rc],
             "delta_g": delta_g["*" + rc],
         }
@@ -244,15 +254,15 @@ def _to_yaml(
 
 if __name__ == "__main__":
     store = oer.connect_db()
-    substrate = "Ti90 C60 O48 H48 F12 Cu15"  # 0.33 ML
-    react_coords = ["co2", "co2-h", "co2-h-h", "co", "cho", "ch2o", "ch3o", "ch3oh"]
-    n_desorbed = [0, 0, 0, 1, 1, 1, 1, 1]
-    n_protons = [0, 1, 2, 2, 3, 4, 5, 6]
+    substrate = "In36 Ga12 Cu48 S96" 
+    react_coords = ["hno3_3", "hno3-h_3", "no2_3", "no2-h_3", "no2-h-h_3", "no_3", "no-h_3", "no-h-h_3", "nh_oh-h_3", "n-h_3", "n-h-h_3", "n-h-h-h_3"]
+    n_desorbed = [0, 0, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3]
+    n_protons =  [0, 1, 1, 2, 3, 3, 4, 5, 6, 6, 7, 8]
 
-    energy, free_energy, delta_g = report_co2rr_mace(
+    energy, free_energy, delta_g = report_noxrr_mace(
         store,
         substrate,
-        series="ML_0_33",
+        series="cigs_112_cat",
         react_coords=react_coords,
         n_desorbed=n_desorbed,
         n_protons=n_protons,
