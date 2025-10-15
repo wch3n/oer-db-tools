@@ -32,7 +32,6 @@ def connect_db(store_name=None):
     return store
 
 def get_energy_and_structure(store, formula, functional="PBE", series=None, aexx=None, thermo_corr=False):
-    print(f"Searching entries {formula} in {series}...")
     gga, lvdw, lhfcalc = get_param(functional)
     query =[
                 {"output.formula_pretty": formula},
@@ -40,7 +39,7 @@ def get_energy_and_structure(store, formula, functional="PBE", series=None, aexx
                 {"output.input.parameters.GGA": {"$regex": gga, "$options": "i"}},
                 {"output.input.parameters.LHFCALC": lhfcalc},
             ]
-    if lhfcalc and aexx:
+    if lhfcalc and isinstance(aexx, float):
         query.append({"output.input.parameters.AEXX": aexx})
     if isinstance(series, str):
         query.append({"output.dir_name": {"$regex": f'/{series}/'}})
@@ -58,7 +57,7 @@ def get_energy_and_structure(store, formula, functional="PBE", series=None, aexx
         print(formula, doc["output"]["output"]["energy"], doc["thermo_corr"], doc["output"]["dir_name"])
         energy +=  doc["thermo_corr"]
     else:
-        print(formula, doc["output"]["output"]["energy"], doc["output"]["dir_name"])
+        print(formula, doc["output"]["output"]["energy"], doc["output"]["input"]["parameters"]["AEXX"], doc["output"]["dir_name"])
     return (
         energy,
         Structure.from_dict(doc["output"]["structure"]),
@@ -216,6 +215,7 @@ def report(
                     print(
                         ads,
                         adsorbate["output"]["output"]["energy"],
+                        adsorbate["output"]["input"]["parameters"]["AEXX"],
                         f"{adsorbate['output']['dir_name']}",
                         )
 
@@ -374,7 +374,7 @@ def find_by_name(store, functional, series, name, aexx=None):
         {"output.input.parameters.LUSE_VDW": lvdw},
         {"output.input.parameters.LHFCALC": lhfcalc},
     ]
-    if lhfcalc and aexx:
+    if lhfcalc and isinstance(aexx, float):
         query.append({"output.input.parameters.AEXX": aexx})
     if isinstance(series, str):
         query.append({"output.dir_name": {"$regex": f'/{series}/'}})
@@ -387,8 +387,10 @@ def find_by_name(store, functional, series, name, aexx=None):
         docs.append(entry)
         total_energy = f'{entry["output"]["output"]["energy"]:8.2f}'
         composition = entry["output"]["composition"]
-        print(composition,
+        print(f"{entry['output']['formula_pretty']}",
+            f"{entry['name']}",
             total_energy,
+            f"{entry['output']['input']['parameters']['AEXX']}",
             f"{entry['output']['dir_name']}"
         )
 
@@ -457,6 +459,7 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None, s
                 if not fast_mode:
                     print(
                         ads_name,
+                        f"{adsorbate['name']}",
                         f"{binding_site:<4}",
                         pair,
                         " ".join(f"{x:8.2f}" for x in s[adsorbate_site].coords[:2]),
@@ -466,7 +469,9 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None, s
                 else:
                     print(
                         ads_name,
+                        f"{adsorbate['name']}",
                         total_energy,
+                        f"{adsorbate['output']['input']['parameters']['AEXX']}",
                         f"{adsorbate['output']['dir_name']}",
                     )
                 #docs['ADS'].append({ads + "*": adsorbate})
@@ -475,8 +480,10 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None, s
             docs['BARE'].append(adsorbate)
             total_energy = f'{adsorbate["output"]["output"]["energy"]:8.2f}'
             print(
-                'BARE',
+                f"{'BARE':<6}",
+                f"{adsorbate['name']}",
                 total_energy,
+                f"{adsorbate['output']['input']['parameters']['AEXX']}",
                 f"{adsorbate['output']['dir_name']}",
             )
     return docs
