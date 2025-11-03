@@ -20,7 +20,7 @@ CORR["H*"] = 0.175 - 0.015 + 0.011
 CORR["CH3OH"] = 1.343 - 0.751 + 0.039 + 0.039 + 0.024 + 0.026
 ADSORBATE_SPECIES = {"OER": ["O", "OH", "OOH"], "OER_bi": ["O", "OH", "H"], "HER": ["H"],
                      "CO2RR_1": ["CO", "CHO", "CH2O", "CH3O", "CH3OH"],}
-MOL_SPECIES = {"OER": ["H2", "O2", "H2O"], 
+MOL_SPECIES = {"OER": ["H2", "O2", "H2O", "H2O2"], 
                "CO2RR_1": ["CO", "H2", "H4CO"],
                "HER": ["H2", "H2O"]}
 DIS_TOL_MAX = 0.5

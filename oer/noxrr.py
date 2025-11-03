@@ -111,6 +111,15 @@ def report_noxrr(
 
     print(free_energy, delta_g)
 
+    last = react_coords[-1].split('_')[0]
+    if last.upper() in MOL_SPECIES[reaction]:
+        delta_g[last + "_g"] = (
+            energy[last.upper()]
+            + energy["H2O"] * n_desorbed[-1]
+            - 0.5 * energy["H2"] * n_protons[-1]
+            - energy["HNO3"]
+        )
+
     if write_yaml:
         _to_yaml(
             yaml_prefix=yaml_prefix,
