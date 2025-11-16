@@ -70,7 +70,8 @@ def report_noxrr(
     functional,
     reaction="NO3RR",
     react_coords=None,
-    n_desorbed=None,
+    h2o_desorbed=None,
+    nh3_desorbed=None,
     n_protons=None,
     series=None,
     series_mol=None,
@@ -101,11 +102,16 @@ def report_noxrr(
 
     for i, rc in enumerate(react_coords):
         rc_path = ([series] if isinstance(series, str) else list(series)) + [rc]
-        energy_rc = get_adsorbate_energy(store, functional, rc_path, thermo_corr=thermo_corr)
-        #print(rc, energy_rc)
+        try:
+            energy_rc = get_adsorbate_energy(store, functional, rc_path, thermo_corr=thermo_corr)
+        except Exception as e:
+            raise ValueError(f'error in {rc}')
+
+        print(rc, energy_rc)
         free_energy["*" + rc] = energy_rc
         delta_g["*" + rc] = (energy_rc
-            + energy["H2O"] * n_desorbed[i]
+            + energy["H2O"] * h2o_desorbed[i]
+            + energy["H3N"] * nh3_desorbed[i]
             - energy["H"] * n_protons[i] - e0
         )
 
@@ -115,8 +121,9 @@ def report_noxrr(
     if last.upper() in MOL_SPECIES[reaction]:
         delta_g[last + "_g"] = (
             energy[last.upper()]
-            + energy["H2O"] * n_desorbed[-1]
-            - 0.5 * energy["H2"] * n_protons[-1]
+            + energy["H2O"] * h2o_desorbed[-1]
+            + energy["HN3"] * nh3_desorbed[-1]
+            - energy["H"] * n_protons[-1]
             - energy["HNO3"]
         )
 
@@ -124,7 +131,8 @@ def report_noxrr(
         _to_yaml(
             yaml_prefix=yaml_prefix,
             react_coords=react_coords,
-            n_desorbed=n_desorbed,
+            h2o_desorbed=h2o_desorbed,
+            nh3_desorbed=nh3_desorbed,
             n_protons=n_protons,
             free_energy=free_energy,
             delta_g=delta_g,
@@ -210,8 +218,9 @@ def report_noxrr_mace(
             free_energy["*" + rc]
             - free_energy["HNO3"]
             - free_energy["substrate"]
-            + free_energy["H2O"] * n_desorbed[i]
-            - 0.5 * free_energy["H2"] * n_protons[i]
+            + free_energy["H2O"] * h2o_desorbed[i]
+            + free_energy["H3N"] * nh3_desorbed[i]
+            - free_energy["H2"] * n_protons[i]
         )
     last = react_coords[-1].split('_')[0]
     if last.upper() in MOL_SPECIES[reaction]:
@@ -238,21 +247,23 @@ def report_noxrr_mace(
 
 
 def _to_yaml(
-    yaml_prefix, react_coords, n_desorbed, n_protons, free_energy, delta_g, reaction
+    yaml_prefix, react_coords, h2o_desorbed, nh3_desorbed, n_protons, free_energy, delta_g, reaction
 ):
     data = {
         rc: {
-            "n_desorbed": nd,
+            "h2o_desorbed": n_h2o,
+            "nh3_desorbed": n_nh3,
             "n_protons": np,
             "free_energy": free_energy["*" + rc],
             "delta_g": delta_g["*" + rc],
         }
-        for rc, nd, np in zip(react_coords, n_desorbed, n_protons)
+        for rc, n_h2o, n_nh3, np in zip(react_coords, h2o_desorbed, nh3_desorbed, n_protons)
     }
     last = react_coords[-1].split('_')[0]
     if last.upper() in MOL_SPECIES[reaction]:
         data[last+'_g'] = {
-                "n_desorbed": n_desorbed[-1],
+                "h2o_desorbed": h2o_desorbed[-1],
+                "nh3_desorbed": nh3_desorbed[-1],
                 "n_protons": n_protons[-1],
                 "delta_g": delta_g[last+'_g'],
             }
@@ -265,7 +276,8 @@ if __name__ == "__main__":
     store = oer.connect_db()
     substrate = "In36 Ga12 Cu48 S96" 
     react_coords = ["hno3_3", "hno3-h_3", "no2_3", "no2-h_3", "no2-h-h_3", "no_3", "no-h_3", "no-h-h_3", "nh_oh-h_3", "n-h_3", "n-h-h_3", "n-h-h-h_3"]
-    n_desorbed = [0, 0, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3]
+    h2o_desorbed = [0, 0, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3]
+    nh3_desorbed = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     n_protons =  [0, 1, 1, 2, 3, 3, 4, 5, 6, 6, 7, 8]
 
     energy, free_energy, delta_g = report_noxrr_mace(
@@ -273,6 +285,7 @@ if __name__ == "__main__":
         substrate,
         series="cigs_112_cat",
         react_coords=react_coords,
-        n_desorbed=n_desorbed,
+        h2o_desorbed=h2o_desorbed,
+        nh3_desorbed=nh3_desorbed,
         n_protons=n_protons,
     )
