@@ -35,7 +35,7 @@ def mongo_composition_match(field, composition):
             }
         }
     )
-    # Flatten the dict for element queries
+    # flatten the dict for element queries
     element_queries = [{f"{field}.{k}": v} for k, v in composition.items()]
     return element_queries + [queries[-1]]
 
@@ -193,7 +193,7 @@ def report_co2rr_mace(
             + free_energy["H2O"] * n_desorbed[i]
             - 0.5 * free_energy["H2"] * n_protons[i]
         )
-    last = react_coords[-1].split('_')[0]
+    last = react_coords[-1].split("_")[0]
     if last.upper() in MOL_SPECIES[reaction]:
         delta_g[last + "_g"] = (
             free_energy[last.upper()]
@@ -218,7 +218,14 @@ def report_co2rr_mace(
 
 
 def _to_yaml(
-    yaml_prefix, react_coords, n_desorbed, n_protons, energy, free_energy, delta_g, reaction
+    yaml_prefix,
+    react_coords,
+    n_desorbed,
+    n_protons,
+    energy,
+    free_energy,
+    delta_g,
+    reaction,
 ):
     data = {
         rc: {
@@ -230,14 +237,14 @@ def _to_yaml(
         }
         for rc, nd, np in zip(react_coords, n_desorbed, n_protons)
     }
-    last = react_coords[-1].split('_')[0]
+    last = react_coords[-1].split("_")[0]
     if last.upper() in MOL_SPECIES[reaction]:
-        data[last+'_g'] = {
-                "n_desorbed": n_desorbed[-1],
-                "n_protons": n_protons[-1],
-                "delta_g": delta_g[last+'_g'],
-            }
-        
+        data[last + "_g"] = {
+            "n_desorbed": n_desorbed[-1],
+            "n_protons": n_protons[-1],
+            "delta_g": delta_g[last + "_g"],
+        }
+
     with open(f"{yaml_prefix}.yaml", "w") as f:
         yaml.dump(data, f, sort_keys=False)
 

@@ -8,6 +8,7 @@ import re
 
 MOL_SPECIES = {"NO3RR": ["H2", "H2O", "H3N", "HNO3"]}
 
+
 def path_map(yaml_file="symlinks.yaml"):
     with open(yaml_file, "r") as f:
         data = yaml.safe_load(f)
@@ -39,13 +40,7 @@ def mongo_composition_match(field, composition):
     return element_queries + [queries[-1]]
 
 
-def get_adsorbate_energy(
-    store,
-    functional,
-    series,
-    aexx=None,
-    thermo_corr=False
-):
+def get_adsorbate_energy(store, functional, series, aexx=None, thermo_corr=False):
     gga, lvdw, lhfcalc = oer.get_param(functional)
     query = [
         {"name": "adsorbate relax"},
@@ -61,7 +56,11 @@ def get_adsorbate_energy(
         for _s in series:
             query += [{"output.dir_name": regex_dir_name(_s)}]
     doc = store.query_one({"$and": query})
-    return doc["output"]["output"]["energy"] + doc["thermo_corr"] if thermo_corr else doc["output"]["output"]["energy"]
+    return (
+        doc["output"]["output"]["energy"] + doc["thermo_corr"]
+        if thermo_corr
+        else doc["output"]["output"]["energy"]
+    )
 
 
 def report_noxrr(
@@ -92,7 +91,9 @@ def report_noxrr(
 
     # substrate
     energy["substrate"], struct["substrate"], forces["substrate"], comp_substrate, _ = (
-        oer.find_substrate(store, substrate_string, functional, series, aexx, thermo_corr)
+        oer.find_substrate(
+            store, substrate_string, functional, series, aexx, thermo_corr
+        )
     )
 
     # go through along the reaction coords
@@ -103,26 +104,30 @@ def report_noxrr(
     for i, rc in enumerate(react_coords):
         rc_path = ([series] if isinstance(series, str) else list(series)) + [rc]
         try:
-            energy_rc = get_adsorbate_energy(store, functional, rc_path, thermo_corr=thermo_corr)
+            energy_rc = get_adsorbate_energy(
+                store, functional, rc_path, thermo_corr=thermo_corr
+            )
         except Exception as e:
-            raise ValueError(f'error in {rc}')
+            raise ValueError(f"error in {rc}")
 
         print(rc, energy_rc)
         free_energy["*" + rc] = energy_rc
-        delta_g["*" + rc] = (energy_rc
+        delta_g["*" + rc] = (
+            energy_rc
             + energy["H2O"] * h2o_desorbed[i]
             + energy["H3N"] * nh3_desorbed[i]
-            - energy["H"] * n_protons[i] - e0
+            - energy["H"] * n_protons[i]
+            - e0
         )
 
     print(free_energy, delta_g)
 
-    last = react_coords[-1].split('_')[0]
+    last = react_coords[-1].split("_")[0]
     if last.upper() in MOL_SPECIES[reaction]:
         delta_g[last + "_g"] = (
             energy[last.upper()]
             + energy["H2O"] * h2o_desorbed[-1]
-            + energy["HN3"] * nh3_desorbed[-1]
+            + energy["H3N"] * nh3_desorbed[-1]
             - energy["H"] * n_protons[-1]
             - energy["HNO3"]
         )
@@ -222,7 +227,7 @@ def report_noxrr_mace(
             + free_energy["H3N"] * nh3_desorbed[i]
             - free_energy["H2"] * n_protons[i]
         )
-    last = react_coords[-1].split('_')[0]
+    last = react_coords[-1].split("_")[0]
     if last.upper() in MOL_SPECIES[reaction]:
         delta_g[last + "_g"] = (
             free_energy[last.upper()]
@@ -247,7 +252,14 @@ def report_noxrr_mace(
 
 
 def _to_yaml(
-    yaml_prefix, react_coords, h2o_desorbed, nh3_desorbed, n_protons, free_energy, delta_g, reaction
+    yaml_prefix,
+    react_coords,
+    h2o_desorbed,
+    nh3_desorbed,
+    n_protons,
+    free_energy,
+    delta_g,
+    reaction,
 ):
     data = {
         rc: {
@@ -257,28 +269,43 @@ def _to_yaml(
             "free_energy": free_energy["*" + rc],
             "delta_g": delta_g["*" + rc],
         }
-        for rc, n_h2o, n_nh3, np in zip(react_coords, h2o_desorbed, nh3_desorbed, n_protons)
+        for rc, n_h2o, n_nh3, np in zip(
+            react_coords, h2o_desorbed, nh3_desorbed, n_protons
+        )
     }
-    last = react_coords[-1].split('_')[0]
+    last = react_coords[-1].split("_")[0]
     if last.upper() in MOL_SPECIES[reaction]:
-        data[last+'_g'] = {
-                "h2o_desorbed": h2o_desorbed[-1],
-                "nh3_desorbed": nh3_desorbed[-1],
-                "n_protons": n_protons[-1],
-                "delta_g": delta_g[last+'_g'],
-            }
-        
+        data[last + "_g"] = {
+            "h2o_desorbed": h2o_desorbed[-1],
+            "nh3_desorbed": nh3_desorbed[-1],
+            "n_protons": n_protons[-1],
+            "delta_g": delta_g[last + "_g"],
+        }
+
     with open(f"{yaml_prefix}.yaml", "w") as f:
         yaml.dump(data, f, sort_keys=False)
 
 
 if __name__ == "__main__":
     store = oer.connect_db()
-    substrate = "In36 Ga12 Cu48 S96" 
-    react_coords = ["hno3_3", "hno3-h_3", "no2_3", "no2-h_3", "no2-h-h_3", "no_3", "no-h_3", "no-h-h_3", "nh_oh-h_3", "n-h_3", "n-h-h_3", "n-h-h-h_3"]
+    substrate = "In36 Ga12 Cu48 S96"
+    react_coords = [
+        "hno3_3",
+        "hno3-h_3",
+        "no2_3",
+        "no2-h_3",
+        "no2-h-h_3",
+        "no_3",
+        "no-h_3",
+        "no-h-h_3",
+        "nh_oh-h_3",
+        "n-h_3",
+        "n-h-h_3",
+        "n-h-h-h_3",
+    ]
     h2o_desorbed = [0, 0, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3]
     nh3_desorbed = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    n_protons =  [0, 1, 1, 2, 3, 3, 4, 5, 6, 6, 7, 8]
+    n_protons = [0, 1, 1, 2, 3, 3, 4, 5, 6, 6, 7, 8]
 
     energy, free_energy, delta_g = report_noxrr_mace(
         store,

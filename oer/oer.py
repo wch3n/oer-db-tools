@@ -13,51 +13,70 @@ CORR = {}
 CORR["H2"] = 0.268 - 0.403 + 0.039 + 0.026 + 0.026
 CORR["O2"] = 0.097 - 0.634 + 0.039 + 0.026 + 0.026
 CORR["H2O"] = 0.567 - 0.670 + 0.039 + 0.039 + 0.026
-CORR["OH*"] = 0.350 - 0.086 + 0.051 
-CORR["O*"] = 0.072 - 0.078 + 0.038 
-CORR["OOH*"] = 0.467 - 0.158 + 0.081 
+CORR["OH*"] = 0.350 - 0.086 + 0.051
+CORR["O*"] = 0.072 - 0.078 + 0.038
+CORR["OOH*"] = 0.467 - 0.158 + 0.081
 CORR["H*"] = 0.175 - 0.015 + 0.011
 CORR["CH3OH"] = 1.343 - 0.751 + 0.039 + 0.039 + 0.024 + 0.026
-ADSORBATE_SPECIES = {"OER": ["O", "OH", "OOH"], "OER_bi": ["O", "OH", "H"], "HER": ["H"],
-                     "CO2RR_1": ["CO", "CHO", "CH2O", "CH3O", "CH3OH"],}
-MOL_SPECIES = {"OER": ["H2", "O2", "H2O", "H2O2"], 
-               "CO2RR_1": ["CO", "H2", "H4CO"],
-               "HER": ["H2", "H2O"]}
+ADSORBATE_SPECIES = {
+    "OER": ["O", "OH", "OOH"],
+    "OER_bi": ["O", "OH", "H"],
+    "HER": ["H"],
+    "CO2RR_1": ["CO", "CHO", "CH2O", "CH3O", "CH3OH"],
+}
+MOL_SPECIES = {
+    "OER": ["H2", "O2", "H2O"],
+    "CO2RR_1": ["CO", "H2", "H4CO"],
+    "HER": ["H2", "H2O"],
+}
 DIS_TOL_MAX = 0.5
 
 
 def connect_db(store_name=None):
-    store = SETTINGS.JOB_STORE.additional_stores[store_name] if store_name is not None else SETTINGS.JOB_STORE
+    store = (
+        SETTINGS.JOB_STORE.additional_stores[store_name]
+        if store_name is not None
+        else SETTINGS.JOB_STORE
+    )
     store.connect()
     return store
 
-def get_energy_and_structure(store, formula, functional="PBE", series=None, aexx=None, thermo_corr=False):
+
+def get_energy_and_structure(
+    store, formula, functional="PBE", series=None, aexx=None, thermo_corr=False
+):
     gga, lvdw, lhfcalc = get_param(functional)
-    query =[
-                {"output.formula_pretty": formula},
-                {"output.input.parameters.LUSE_VDW": lvdw},
-                {"output.input.parameters.GGA": {"$regex": gga, "$options": "i"}},
-                {"output.input.parameters.LHFCALC": lhfcalc},
-            ]
+    query = [
+        {"output.formula_pretty": formula},
+        {"output.input.parameters.LUSE_VDW": lvdw},
+        {"output.input.parameters.GGA": {"$regex": gga, "$options": "i"}},
+        {"output.input.parameters.LHFCALC": lhfcalc},
+    ]
     if lhfcalc and isinstance(aexx, float):
         query.append({"output.input.parameters.AEXX": aexx})
     if isinstance(series, str):
-        query.append({"output.dir_name": {"$regex": f'/{series}/'}})
+        query.append({"output.dir_name": {"$regex": f"/{series}/"}})
     elif isinstance(series, list):
         for _s in series:
-            query.append({"output.dir_name": {"$regex": f'/{_s}/'}})
-    doc = store.query_one(
-        {
-            "$and": query
-        }
-    )
+            query.append({"output.dir_name": {"$regex": f"/{_s}/"}})
+    doc = store.query_one({"$and": query})
     energy = doc["output"]["output"]["energy"]
     dir_name = doc["output"]["dir_name"]
     if thermo_corr:
-        print(formula, doc["output"]["output"]["energy"], doc["thermo_corr"], doc["output"]["dir_name"])
-        energy +=  doc["thermo_corr"]
+        print(
+            formula,
+            doc["output"]["output"]["energy"],
+            doc["thermo_corr"],
+            doc["output"]["dir_name"],
+        )
+        energy += doc["thermo_corr"]
     else:
-        print(formula, doc["output"]["output"]["energy"], doc["output"]["input"]["parameters"]["AEXX"], doc["output"]["dir_name"])
+        print(
+            formula,
+            doc["output"]["output"]["energy"],
+            doc["output"]["input"]["parameters"]["AEXX"],
+            doc["output"]["dir_name"],
+        )
     return (
         energy,
         Structure.from_dict(doc["output"]["structure"]),
@@ -86,10 +105,14 @@ def calc_deltaG(energy_raw, reaction="OER", corr=True, corr_liquid=0, corr_dict=
                 energy["OH*"] - energy["substrate"] - energy["H2O"] + 0.5 * energy["H2"]
             )
             g2 = energy["O*"] - energy["OH*"] + 0.5 * energy["H2"]
-            g3 = energy["H*"] + energy["O2"] - energy["O*"] - energy["H2O"] + 0.5 * energy["H2"]
-            g4 = (
-                energy["substrate"] - energy["H*"] + 0.5 * energy["H2"]
+            g3 = (
+                energy["H*"]
+                + energy["O2"]
+                - energy["O*"]
+                - energy["H2O"]
+                + 0.5 * energy["H2"]
             )
+            g4 = energy["substrate"] - energy["H*"] + 0.5 * energy["H2"]
             return {"G1": g1, "G2": g2, "G3": g3, "G4": g4}
         case "HER":
             g1 = energy["H*"] - energy["substrate"] - 0.5 * energy["H2"]
@@ -141,7 +164,7 @@ def report(
     corr_liquid=0,
     corr_dict=CORR,
     aexx=None,
-    fast_mode=False
+    fast_mode=False,
 ):
     gga, lvdw, lhfcalc = get_param(functional)
     energy = {}
@@ -167,10 +190,10 @@ def report(
     if lhfcalc and aexx:
         query.append({"output.input.parameters.AEXX": aexx})
     if isinstance(series, str):
-        query.append({"output.dir_name": {"$regex": f'/{series}/'}})
+        query.append({"output.dir_name": {"$regex": f"/{series}/"}})
     elif isinstance(series, list):
         for _s in series:
-            query.append({"output.dir_name": {"$regex": f'/{_s}/'}})
+            query.append({"output.dir_name": {"$regex": f"/{_s}/"}})
     for ads in ADSORBATE_SPECIES[reaction]:
         tot_energy = 0.0
         comp = comp_substrate + Composition(ads)
@@ -190,9 +213,11 @@ def report(
                             s, ads_indices
                         )
                         if (
-                            isinstance(anchor_index, int) and binding_site == anchor_index
+                            isinstance(anchor_index, int)
+                            and binding_site == anchor_index
                         ) or (
-                            isinstance(anchor_index, list) and binding_site in anchor_index
+                            isinstance(anchor_index, list)
+                            and binding_site in anchor_index
                         ):
                             print(
                                 ads,
@@ -217,7 +242,7 @@ def report(
                         adsorbate["output"]["output"]["energy"],
                         adsorbate["output"]["input"]["parameters"]["AEXX"],
                         f"{adsorbate['output']['dir_name']}",
-                        )
+                    )
 
                 if adsorbate["output"]["output"]["energy"] < tot_energy:
                     (
@@ -233,7 +258,9 @@ def report(
                 if not exhaustive:
                     break
 
-    deltaG = calc_deltaG(energy, reaction, corr=True, corr_liquid=corr_liquid, corr_dict=corr_dict)
+    deltaG = calc_deltaG(
+        energy, reaction, corr=True, corr_liquid=corr_liquid, corr_dict=corr_dict
+    )
     if write_poscar:
         save_poscar(struct)
     return deltaG, energy, struct, forces
@@ -241,7 +268,7 @@ def report(
 
 def apply_corr(energy, corr_liquid, corr_dict):
     corr = corr_dict.copy()
-    corr['H2O'] += corr_liquid
+    corr["H2O"] += corr_liquid
     for i in energy.keys():
         if i in corr.keys():
             energy[i] += corr[i]
@@ -289,7 +316,9 @@ def write_poscar(struct, adsorbate_only=True):
         struct[name].to_file(f'POSCAR.{name.replace("*","-")}')
 
 
-def find_substrate(store, substrate_string, functional, series=None, aexx=None, thermo_corr=False):
+def find_substrate(
+    store, substrate_string, functional, series=None, aexx=None, thermo_corr=False
+):
     gga, lvdw, lhfcalc = get_param(functional)
     comp_target = Composition(substrate_string)
     query = [
@@ -301,10 +330,10 @@ def find_substrate(store, substrate_string, functional, series=None, aexx=None, 
     if lhfcalc and aexx:
         query.append({"output.input.parameters.AEXX": aexx})
     if isinstance(series, str):
-        query.append({"output.dir_name": {"$regex": f'/{series}/'}})
+        query.append({"output.dir_name": {"$regex": f"/{series}/"}})
     elif isinstance(series, list):
         for _s in series:
-            query.append({"output.dir_name": {"$regex": f'/{_s}/'}})
+            query.append({"output.dir_name": {"$regex": f"/{_s}/"}})
 
     slabs = []
     for substrate in store.query({"$and": query}):
@@ -321,8 +350,13 @@ def find_substrate(store, substrate_string, functional, series=None, aexx=None, 
             eslab = slab["output"]["output"]["energy"]
 
     energy, struct, forces, doc = get_energy_and_structure(
-            store, substrate["output"]["formula_pretty"], functional, series, aexx, thermo_corr=thermo_corr
-            )
+        store,
+        substrate["output"]["formula_pretty"],
+        functional,
+        series,
+        aexx,
+        thermo_corr=thermo_corr,
+    )
 
     return energy, struct, forces, comp_substrate, doc
 
@@ -343,24 +377,24 @@ def find_anchor(structure, ads_indices):
             adsorbate_site = idx
     return binding_site, adsorbate_site, binding_dist
 
+
 def find_by_dir_name(store, series, name):
     query = [
         {"name": name},
     ]
     if isinstance(series, str):
-        query.append({"output.dir_name": {"$regex": f'/{series}/'}})
+        query.append({"output.dir_name": {"$regex": f"/{series}/"}})
     elif isinstance(series, list):
         for _s in series:
-            query.append({"output.dir_name": {"$regex": f'/{_s}/'}})
-    
+            query.append({"output.dir_name": {"$regex": f"/{_s}/"}})
+
     docs = []
     for entry in store.query({"$and": query}):
         docs.append(entry)
         composition = entry["output"]["composition"]
-        print(composition,
-            f"{entry['output']['dir_name']}"
-        )
+        print(composition, f"{entry['output']['dir_name']}")
     return docs
+
 
 def find_by_name(store, functional, series, name, aexx=None):
     gga, lvdw, lhfcalc = get_param(functional)
@@ -377,26 +411,39 @@ def find_by_name(store, functional, series, name, aexx=None):
     if lhfcalc and isinstance(aexx, float):
         query.append({"output.input.parameters.AEXX": aexx})
     if isinstance(series, str):
-        query.append({"output.dir_name": {"$regex": f'/{series}/'}})
+        query.append({"output.dir_name": {"$regex": f"/{series}/"}})
     elif isinstance(series, list):
         for _s in series:
-            query.append({"output.dir_name": {"$regex": f'/{_s}/'}})
+            query.append({"output.dir_name": {"$regex": f"/{_s}/"}})
 
     docs = []
     for entry in store.query({"$and": query}):
         docs.append(entry)
         total_energy = f'{entry["output"]["output"]["energy"]:8.2f}'
         composition = entry["output"]["composition"]
-        print(f"{entry['output']['formula_pretty']}",
+        print(
+            f"{entry['output']['formula_pretty']}",
             f"{entry['name']}",
             total_energy,
             f"{entry['output']['input']['parameters']['AEXX']}",
-            f"{entry['output']['dir_name']}"
+            f"{entry['output']['dir_name']}",
         )
 
     return docs
 
-def find_all(store, substrate_string, functional, reaction="OER", series=None, series_subs=None, series_mol=None, name="adsorbate relax", aexx=None, fast_mode=False):
+
+def find_all(
+    store,
+    substrate_string,
+    functional,
+    reaction="OER",
+    series=None,
+    series_subs=None,
+    series_mol=None,
+    name="adsorbate relax",
+    aexx=None,
+    fast_mode=False,
+):
     gga, lvdw, lhfcalc = get_param(functional)
     energy = {}
     struct = {}
@@ -413,7 +460,7 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None, s
         comp_substrate,
         docs["SLAB"],
     ) = find_substrate(store, substrate_string, functional, series_subs, aexx)
-        
+
     query = [
         {"name": name},
         {"output.input.parameters.GGA": {"$regex": gga, "$options": "i"}},
@@ -423,22 +470,22 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None, s
     if lhfcalc and aexx:
         query.append({"output.input.parameters.AEXX": aexx})
     if isinstance(series, str):
-        query.append({"output.dir_name": {"$regex": f'/{series}/'}})
+        query.append({"output.dir_name": {"$regex": f"/{series}/"}})
     elif isinstance(series, list):
         for _s in series:
-            query.append({"output.dir_name": {"$regex": f'/{_s}/'}})
+            query.append({"output.dir_name": {"$regex": f"/{_s}/"}})
 
     comp = {}
 
     for ads in ADSORBATE_SPECIES[reaction]:
-        docs[ads+'*'] = []
-        comp[ads+'*'] = comp_substrate + Composition(ads)
+        docs[ads + "*"] = []
+        comp[ads + "*"] = comp_substrate + Composition(ads)
 
-    docs['BARE'] = []
+    docs["BARE"] = []
     for adsorbate in store.query({"$and": query}):
         comp_adsorbate = Composition(adsorbate["output"]["composition"])
         for ads in ADSORBATE_SPECIES[reaction]:
-            if comp_adsorbate == comp[ads+'*']:
+            if comp_adsorbate == comp[ads + "*"]:
                 s = Structure.from_dict(adsorbate["output"]["structure"])
                 if not fast_mode:
                     ads_indices, is_wrong_adsorbate = find_adsorbate(
@@ -448,9 +495,10 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None, s
                         # print('Adsorbate different from the specified species...')
                         continue
                     binding_site, adsorbate_site, _ = find_anchor(s, ads_indices)
-                    energy["".join([ads, "*"])], struct["".join([ads, "*"])] = adsorbate[
-                        "output"
-                    ]["output"]["energy"], Structure.from_dict(
+                    (
+                        energy["".join([ads, "*"])],
+                        struct["".join([ads, "*"])],
+                    ) = adsorbate["output"]["output"]["energy"], Structure.from_dict(
                         adsorbate["output"]["structure"]
                     )
                     pair = f"{s[binding_site].species_string:>2}-{s[adsorbate_site].species_string:<2}"
@@ -474,10 +522,10 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None, s
                         f"{adsorbate['output']['input']['parameters']['AEXX']}",
                         f"{adsorbate['output']['dir_name']}",
                     )
-                #docs['ADS'].append({ads + "*": adsorbate})
-                docs[ads+'*'].append(adsorbate)
+                # docs['ADS'].append({ads + "*": adsorbate})
+                docs[ads + "*"].append(adsorbate)
         if comp_adsorbate == comp_substrate:
-            docs['BARE'].append(adsorbate)
+            docs["BARE"].append(adsorbate)
             total_energy = f'{adsorbate["output"]["output"]["energy"]:8.2f}'
             print(
                 f"{'BARE':<6}",
@@ -488,13 +536,8 @@ def find_all(store, substrate_string, functional, reaction="OER", series=None, s
             )
     return docs
 
-def get_adsorbate_energy(
-    store,
-    functional,
-    series,
-    aexx=None,
-    thermo_corr=False
-):
+
+def get_adsorbate_energy(store, functional, series, aexx=None, thermo_corr=False):
     gga, lvdw, lhfcalc = oer.get_param(functional)
     query = [
         {"name": "adsorbate relax"},
@@ -510,7 +553,12 @@ def get_adsorbate_energy(
         for _s in series:
             query += [{"output.dir_name": regex_dir_name(_s)}]
     doc = store.query_one({"$and": query})
-    return doc["output"]["output"]["energy"] + doc["thermo_corr"] if thermo_corr else doc["output"]["output"]["energy"]
+    return (
+        doc["output"]["output"]["energy"] + doc["thermo_corr"]
+        if thermo_corr
+        else doc["output"]["output"]["energy"]
+    )
+
 
 def report_her(
     store,
@@ -525,7 +573,7 @@ def report_her(
     aexx=None,
     thermo_corr=False,
     write_yaml=True,
-    yaml_prefix="her"
+    yaml_prefix="her",
 ):
     gga, lvdw, lhfcalc = oer.get_param(functional)
     energy = {}
@@ -539,22 +587,25 @@ def report_her(
 
     # substrate
     energy["substrate"], struct["substrate"], forces["substrate"], comp_substrate, _ = (
-        oer.find_substrate(store, substrate_string, functional, series, aexx, thermo_corr)
+        oer.find_substrate(
+            store, substrate_string, functional, series, aexx, thermo_corr
+        )
     )
 
     # go through along the reaction coords
     delta_g = {}
     free_energy = {}
-    e0 = energy["substrate"] 
+    e0 = energy["substrate"]
     for i, rc in enumerate(react_coords):
         rc_path = ([series] if isinstance(series, str) else list(series)) + [rc]
-        energy_rc = get_adsorbate_energy(store, functional, rc_path, thermo_corr=thermo_corr)
-        free_energy["*" + rc] = energy_rc
-        delta_g["*" + rc] = (energy_rc
-            + energy["H2O"] * n_desorbed[i]
-            - energy["H"] * n_protons[i] - e0
+        energy_rc = get_adsorbate_energy(
+            store, functional, rc_path, thermo_corr=thermo_corr
         )
-    
+        free_energy["*" + rc] = energy_rc
+        delta_g["*" + rc] = (
+            energy_rc + energy["H2O"] * n_desorbed[i] - energy["H"] * n_protons[i] - e0
+        )
+
     print(free_energy, delta_g)
 
     if write_yaml:
@@ -568,6 +619,7 @@ def report_her(
             reaction=reaction,
         )
 
+
 def report_her_mace(
     store,
     substrate_string,
@@ -577,7 +629,7 @@ def report_her_mace(
     n_protons=None,
     series=None,
     write_yaml=True,
-    yaml_prefix='her'
+    yaml_prefix="her",
 ):
     from pymatgen.core import Composition
 
@@ -612,11 +664,11 @@ def report_her_mace(
     # the first step is always the adsorption of CO2
     rc_uniq = []
     for i, rc in enumerate(react_coords):
-        rc_name = rc+f'_{i}' if rc in rc_uniq else rc
+        rc_name = rc + f"_{i}" if rc in rc_uniq else rc
         rc_uniq.append(rc_name)
 
         query = [
-            #{"name": "adsorbate relax"},
+            # {"name": "adsorbate relax"},
             {"output.input.calculator": "macecalculator"},
         ]
         query += [{"output.dir_name": regex_dir_name(rc)}]
@@ -632,7 +684,7 @@ def report_her_mace(
 
     rc_uniq = []
     for i, rc in enumerate(react_coords):
-        rc_name = rc+f'_{i}' if rc in rc_uniq else rc
+        rc_name = rc + f"_{i}" if rc in rc_uniq else rc
         rc_uniq.append(rc_name)
 
         delta_g["*" + rc_name] = (
@@ -655,26 +707,29 @@ def report_her_mace(
     return energy, free_energy, delta_g
 
 
-def _to_yaml(yaml_prefix, react_coords, n_desorbed, n_protons, free_energy, delta_g, reaction):
+def _to_yaml(
+    yaml_prefix, react_coords, n_desorbed, n_protons, free_energy, delta_g, reaction
+):
     data = {
         rc: {
             "n_desorbed": nd,
             "n_protons": np,
-            "free_energy": free_energy['*'+rc],
-            "delta_g": delta_g['*'+rc],
+            "free_energy": free_energy["*" + rc],
+            "delta_g": delta_g["*" + rc],
         }
         for rc, nd, np in zip(react_coords, n_desorbed, n_protons)
     }
-    last = react_coords[-1].split('_')[0]
+    last = react_coords[-1].split("_")[0]
     if last.upper() in MOL_SPECIES[reaction]:
-        data[last+'_g'] = {
+        data[last + "_g"] = {
             "n_desorbed": n_desorbed[-1],
             "n_protons": n_protons[-1],
-            "delta_g": delta_g[last+'_g'],
+            "delta_g": delta_g[last + "_g"],
         }
 
     with open(f"{yaml_prefix}.yaml", "w") as f:
         yaml.dump(data, f, sort_keys=False)
+
 
 def save_poscar(struct, adsorbate_only=True):
     for name in struct:
