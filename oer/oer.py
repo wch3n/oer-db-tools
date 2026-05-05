@@ -396,7 +396,7 @@ def find_by_dir_name(store, series, name):
     return docs
 
 
-def find_by_name(store, functional, series, name, aexx=None):
+def find_by_name(store, functional, series, name, aexx=None, exclude_series=None):
     gga, lvdw, lhfcalc = get_param(functional)
     energy = {}
     struct = {}
@@ -415,6 +415,19 @@ def find_by_name(store, functional, series, name, aexx=None):
     elif isinstance(series, list):
         for _s in series:
             query.append({"output.dir_name": {"$regex": f"/{_s}/"}})
+    if isinstance(exclude_series, str):
+        query.append(
+            {
+                "output.dir_name": {
+                    "$not": {"$regex": f"/{re.escape(exclude_series)}/"}
+                }
+            }
+        )
+    elif isinstance(exclude_series, list):
+        for _s in exclude_series:
+            query.append(
+                {"output.dir_name": {"$not": {"$regex": f"/{re.escape(_s)}/"}}}
+            )
 
     docs = []
     for entry in store.query({"$and": query}):
